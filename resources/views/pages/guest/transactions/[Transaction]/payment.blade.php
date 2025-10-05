@@ -2,221 +2,375 @@
 
 use App\Models\Transaction;
 use App\Services\MidtransService;
-use function Livewire\Volt\{state, computed};
+use Carbon\Carbon;
+use function Livewire\Volt\{state, computed, uses};
 use function Laravel\Folio\{name, middleware};
 use Jantinnerezo\LivewireAlert\Facades\LivewireAlert;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 name('transactions.payment');
 middleware(['auth', 'role:guest']);
 
-// Simpan ID transaksi dari parameter route
-state(['transaction']);
+// State: kita menerima $transaction (model instance) dari route/volt component
+state([
+    'transaction', // expects an instance of App\Models\Transaction
+]);
 
-// // Ambil data transaksi lengkap
-// $transaction = computed(function () {
-    
-//     return Transaction::with(['room.boardingHouse', 'user.identity'])
-//         ->findOrFail($this->transaction);
-// });
-
-// Buat Snap Token Midtrans
-$snapToken = computed( function () {
+/**
+ * computed snapToken:
+ *  - bila $transaction sudah punya snapToken / snap_token -> gunakan
+ *  - jika belum -> generate via MidtransService dan simpan ke DB
+ */
+$snapToken = computed(function () {
     $transaction = $this->transaction;
 
+    // safety: pastikan model terisi
+    if (!$transaction || !$transaction->id) {
+        Log::warning('Payment view without transaction instance');
+        return '';
+    }
+
+    // ownership check
+    if ($transaction->user_id !== auth()->id()) {
+        Log::warning('Unauthorized access to payment page', [
+            'transaction_id' => $transaction->id,
+            'user_id' => auth()->id(),
+        ]);
+        abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
+    }
+
+    // pick existing attribute either camelCase or snake_case
+    $existingToken = $transaction->snapToken ?? ($transaction->snap_token ?? null);
+    if (!empty($existingToken)) {
+        Log::info('Using existing snap token from DB', [
+            'transaction_id' => $transaction->id,
+            'preview' => substr($existingToken, 0, 12) . '...',
+        ]);
+        return $existingToken;
+    }
+
+    // Build & validate params before calling Midtrans
     try {
-        // Validasi agar hanya user yang memiliki transaksi yang bisa membayar
-        if ($transaction->user_id !== auth()->id() || $transaction->status !== 'confirmed') {
-            \Log::warning('Unauthorized payment attempt', [
-                'transaction_id' => $transaction->id,
-                'user_id' => auth()->id(),
-                'transaction_user_id' => $transaction->user_id,
-                'transaction_status' => $transaction->status,
-            ]);
-            abort(403, 'Unauthorized access to payment');
+        $midtrans = new MidtransService();
+
+        $orderId = $transaction->code;
+        $quantity = max(1, (int) ($transaction->duration ?? 1));
+        $price = (int) round($transaction->room->price ?? 0);
+
+        $items = [
+            [
+                'id' => 'room-' . ($transaction->room->id ?? '0'),
+                'price' => $price,
+                'quantity' => $quantity,
+                'name' => 'Sewa Kamar ' . ($transaction->room->room_number ?? '-') . ' - ' . ($transaction->room->boardingHouse->name ?? '-'),
+            ],
+        ];
+
+        // ensure gross amount matches items
+        $calculatedGross = 0;
+        foreach ($items as $it) {
+            $calculatedGross += ((int) $it['price']) * ((int) $it['quantity']);
         }
 
-        $midtransService = new MidtransService();
+        $grossAmount = (int) round($transaction->total ?? $calculatedGross);
+        if ($grossAmount !== $calculatedGross) {
+            Log::info('gross_amount mismatch: overriding with calculated items amount', [
+                'transaction_id' => $transaction->id,
+                'declared' => $transaction->total ?? null,
+                'calculated' => $calculatedGross,
+            ]);
+            $grossAmount = $calculatedGross;
+        }
 
-        $transactionDetails = [
-            'order_id' => $transaction->code,
-            'gross_amount' => (int) $transaction->total,
+        if ($grossAmount <= 0) {
+            Log::error('Invalid gross amount for transaction', ['transaction_id' => $transaction->id, 'gross' => $grossAmount]);
+            return '';
+        }
+
+        $customer = [
+            'first_name' => $transaction->user->name ?? 'Customer',
+            'email' => $transaction->user->email ?? '',
+            // try both identity phone & whatsapp
+            'phone' => $transaction->user->identity->phone_number ?? ($transaction->user->identity->whatsapp_number ?? ''),
         ];
 
-        $customerDetails = [
-            'first_name' => $transaction->user->name,
-            'email' => $transaction->user->email,
-            'phone' => $transaction->user->identity->phone_number ?? '',
-        ];
+        // build params via service helper (if available) or manual
+        if (method_exists($midtrans, 'buildSnapParams')) {
+            $params = $midtrans->buildSnapParams($orderId, $grossAmount, $customer, $items, 60);
+            // use getSnapToken (if service supports it) or createTransaction
+            if (method_exists($midtrans, 'getSnapToken')) {
+                $token = $midtrans->getSnapToken($params);
+            } else {
+                $result = $midtrans->createTransaction(['transaction_details' => ['order_id' => $orderId, 'gross_amount' => $grossAmount], 'customer_details' => $customer, 'item_details' => $items]);
+                $token = $result->token ?? ($result->snap_token ?? null);
+            }
+        } else {
+            // fallback to createTransaction signature (older service)
+            $result = $midtrans->createTransaction(['transaction_details' => ['order_id' => $orderId, 'gross_amount' => $grossAmount], 'customer_details' => $customer, 'item_details' => $items]);
+            $token = $result->token ?? ($result->snap_token ?? null);
+        }
 
-        $itemDetails = [[
-            'id' => 'room-' . $transaction->room->id,
-            'price' => (int) $transaction->room->price,
-            'quantity' => max(1, (int) $transaction->duration), // Pastikan quantity minimal 1
-            'name' => 'Sewa Kamar ' . $transaction->room->room_number . ' - ' . $transaction->room->boardingHouse->name,
-        ]];
+        if (empty($token)) {
+            Log::error('Midtrans returned empty token', ['transaction_id' => $transaction->id]);
+            return '';
+        }
 
-        \Log::info('Creating snap token for transaction', [
-            'transaction_id' => $transaction->id,
-            'order_id' => $transaction->code,
-            'gross_amount' => $transaction->total,
-        ]);
+        // store token to DB: try camelCase then snake_case
+        try {
+            // try camelCase attribute first (per model fillable)
+            $transaction->update(['snapToken' => $token]);
+        } catch (\Throwable $e) {
+            // fallback to snake_case column (snap_token)
+            try {
+                $transaction->update(['snap_token' => $token]);
+            } catch (\Throwable $e2) {
+                Log::error('Failed to save snap token to DB', [
+                    'transaction_id' => $transaction->id,
+                    'error1' => $e->getMessage(),
+                    'error2' => $e2->getMessage(),
+                ]);
+                // token still returned to frontend, but DB not updated
+            }
+        }
 
-        $snapResult = $midtransService->createTransaction($transactionDetails, $customerDetails, $itemDetails);
-        $token = $snapResult->token;
-
-        \Log::info('Snap token created successfully', [
-            'transaction_id' => $transaction->id,
-            'token_length' => strlen($token),
-        ]);
+        Log::info('Snap token created & returned', ['transaction_id' => $transaction->id, 'token_preview' => substr($token, 0, 12) . '...']);
 
         return $token;
-
-    } catch (\Exception $e) {
-        \Log::error('Failed to create snap token', [
+    } catch (\Exception $ex) {
+        Log::error('Failed to generate snap token', [
             'transaction_id' => $transaction->id,
-            'error_message' => $e->getMessage(),
-            'error_file' => $e->getFile(),
-            'error_line' => $e->getLine(),
+            'error' => $ex->getMessage(),
         ]);
-
-        // Return empty token to prevent frontend errors
         return '';
     }
 });
+
+/**
+ * updateStatus: periksa Midtrans transaction status, update transaction->status (best-effort)
+ * If DB schema does not support columns updated below, function will catch and log the error.
+ */
+$updateStatus = function () {
+    $transaction = $this->transaction;
+
+    if (!$transaction || !$transaction->id) {
+        $this->alert('error', 'Transaksi tidak ditemukan.', ['position' => 'center', 'toast' => true]);
+        return redirect()->back();
+    }
+
+    try {
+        $midtrans = new MidtransService();
+        // statusTransaction expects order_id (transaction->code)
+        $response = $midtrans->statusTransaction($transaction->code);
+
+        // map midtrans transaction_status to local status
+        $mapping = [
+            'capture' => 'paid',
+            'settlement' => 'paid',
+            'pending' => 'pending',
+            'deny' => 'failed',
+            'cancel' => 'failed',
+            'expire' => 'expired',
+            'challenge' => 'challenge',
+        ];
+
+        $txStatus = $response->transaction_status ?? ($response->status_code ?? null);
+        $paymentType = $response->payment_type ?? null;
+
+        // choose mapped status, fallback to raw
+        $localStatus = $mapping[$txStatus] ?? ($txStatus ?? 'unknown');
+
+        // Try update transaction record with best-effort fields
+        $updateData = [
+            'status' => $localStatus,
+        ];
+
+        // add some optional fields if exist on model/table
+        if (property_exists($transaction, 'payment_type') || \Schema::hasColumn($transaction->getTable(), 'payment_type')) {
+            $updateData['payment_type'] = $paymentType;
+        }
+        if (property_exists($transaction, 'paid_at') || \Schema::hasColumn($transaction->getTable(), 'paid_at')) {
+            // settlement_time or transaction_time
+            $paidAt = $response->settlement_time ?? ($response->transaction_time ?? null);
+            if ($paidAt) {
+                $updateData['paid_at'] = $paidAt;
+            }
+        }
+
+        try {
+            $transaction->update($updateData);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to update transaction columns (maybe schema mismatch)', [
+                'transaction_id' => $transaction->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        Log::info('Midtrans status checked', [
+            'transaction_id' => $transaction->id,
+            'midtrans_status' => $txStatus,
+            'local_status' => $localStatus,
+        ]);
+
+        $this->alert('success', 'Status pembayaran diperbarui: ' . strtoupper($localStatus), ['position' => 'center', 'toast' => true]);
+
+        return redirect()->route('transactions.show', ['transaction' => $transaction->id]);
+    } catch (\Exception $e) {
+        Log::error('Error checking Midtrans status: ' . $e->getMessage(), ['transaction_id' => $transaction->id]);
+        $msg = $e instanceof ValidationException ? implode('<br>', $e->validator->errors()->all()) : 'Terjadi kesalahan saat mengecek status Midtrans.';
+        return $this->alert('error', 'Error pengecekan Midtrans!<br>' . $msg, ['position' => 'center', 'timer' => 4000, 'toast' => true]);
+    }
+};
+
 ?>
 
 <x-guest-layout>
-  @volt
-    <div class="container my-5">
-        <div class="row justify-content-center">
-            <div class="col-lg-10">
-                <div class="card shadow">
-                    <div class="card-header bg-success text-white">
-                        <h4 class="mb-0">Pilih Metode Pembayaran</h4>
-                    </div>
+    @volt
+        <style>
+            /* minimal improved styles */
+            .price {
+                color: #0d6efd;
+                font-weight: 700;
+                font-size: 1.6rem;
+            }
+
+            .btn-embed {
+                width: 100%;
+                padding: .75rem;
+                font-size: 1rem;
+            }
+
+            .snap-wrapper {
+                min-height: 520px;
+                width: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+        </style>
+
+        <div class="container">
+            <div class="row py-5 gap-2 justify-content-between">
+                <div class="col-lg-6 card">
                     <div class="card-body">
-                        <div class="row">
-                            {{-- Kolom kiri --}}
-                            <div class="col-md-8">
-                                <h5>Ringkasan Pesanan</h5>
-                                <div class="card mb-3">
-                                    <div class="card-body">
-                                        <div class="row">
-                                            <div class="col-sm-3">
-                                                <img src="{{ $transaction->room->boardingHouse->thumbnail 
-                                                    ? Storage::url($transaction->room->boardingHouse->thumbnail) 
-                                                    : 'https://dummyimage.com/200x150/000/bfbfbf&text=no+image' }}"
-                                                    class="img-fluid rounded" alt="Kos">
-                                            </div>
-                                            <div class="col-sm-9">
-                                                <h6>{{ $transaction->room->boardingHouse->name }}</h6>
-                                                <p class="mb-1">{{ $transaction->room->boardingHouse->address }}</p>
-                                                <p class="mb-1">
-                                                    Kamar {{ $transaction->room->room_number }}
-                                                    ({{ $transaction->room->size }} m²)
-                                                </p>
-                                                <p class="mb-1">
-                                                    Check-in: {{ \Carbon\Carbon::parse($transaction->check_in)->translatedFormat('d-m-Y') }}
-                                                </p>
-                                                <p class="mb-0">Durasi: {{ $transaction->duration }} bulan</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <h5>Metode Pembayaran Tersedia</h5>
-                                <div class="row">
-                                    @foreach ([
-                                        ['method' => 'gopay', 'color' => '00ff00', 'text' => 'GoPay'],
-                                        ['method' => 'ovo', 'color' => 'purple', 'text' => 'OVO'],
-                                        ['method' => 'dana', 'color' => '007bff', 'text' => 'DANA'],
-                                        ['method' => 'bank', 'color' => '999999', 'text' => 'Transfer Bank'],
-                                    ] as $m)
-                                        <div class="col-md-6">
-                                            <div class="card payment-method mb-3" data-method="{{ $m['method'] }}">
-                                                <div class="card-body text-center">
-                                                    <img src="https://dummyimage.com/100x50/{{ $m['color'] }}/ffffff&text={{ urlencode($m['text']) }}"
-                                                        class="img-fluid mb-2" alt="{{ $m['text'] }}">
-                                                    <p class="mb-0">{{ $m['text'] }}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    @endforeach
-                                </div>
-                            </div>
-
-                            {{-- Kolom kanan --}}
-                            <div class="col-md-4">
-                                <div class="card sticky-top" style="top: 20px;">
-                                    <div class="card-header">
-                                        <h6 class="mb-0">Total Pembayaran</h6>
-                                    </div>
-                                    <div class="card-body">
-                                        <table class="table table-sm">
-                                            <tr>
-                                                <td>Harga per bulan</td>
-                                                <td class="text-end">{{ formatRupiah($transaction->room->price) }}</td>
-                                            </tr>
-                                            <tr>
-                                                <td>Durasi</td>
-                                                <td class="text-end">{{ $transaction->duration }} bulan</td>
-                                            </tr>
-                                            <tr class="fw-bold border-top">
-                                                <td>Total</td>
-                                                <td class="text-end">{{ formatRupiah($transaction->total) }}</td>
-                                            </tr>
-                                        </table>
-
-                                        <button id="pay-button" class="btn btn-primary w-100">
-                                            <i class="bi bi-credit-card me-2"></i>Bayar Sekarang
-                                        </button>
-
-                                        <p class="text-muted small mt-2 mb-0">
-                                            <i class="bi bi-shield-check me-1"></i>
-                                            Pembayaran aman dengan Midtrans
-                                        </p>
-                                    </div>
-                                </div>
+                        <div class="mt-1 mb-3">
+                            <div class="small ">Kode Transaksis</div>
+                            <div class="price">{{ $transaction->code }}</div>
+                        </div>
+                        <div class="d-flex gap-3 align-items-start">
+                            <img src="{{ $transaction->room->boardingHouse->thumbnail ? Storage::url($transaction->room->boardingHouse->thumbnail) : 'https://dummyimage.com/140x90/ddd/777&text=No+Img' }}"
+                                style="width:140px;height:90px;object-fit:cover;border-radius:.5rem" alt="thumbnail">
+                            <div>
+                                <h6 class="mb-1">{{ $transaction->room->boardingHouse->name }}</h6>
+                                <div class="small mb-2">
+                                    Kamar {{ $transaction->room->room_number }}</div>
+                                <div class="small mb-2">
+                                    Ukuran {{ $transaction->room->size }} m²</div>
+                                <div class="small">{{ $transaction->room->boardingHouse->address }}</div>
                             </div>
                         </div>
+
+                        <hr>
+
+                        <div class="row g-2">
+                            <div class="col-lg-12 ">Ringkasan Pesanan</div>
+
+                            <div class="col-lg-6 ">Check-in</div>
+                            <div class="col-lg-6 text-end">
+                                {{ \Carbon\Carbon::parse($transaction->check_in)->translatedFormat('d M Y') }}</div>
+
+                            <div class="col-lg-6 ">Check-out</div>
+                            <div class="col-lg-6 text-end">
+                                {{ \Carbon\Carbon::parse($transaction->check_out)->translatedFormat('d M Y') }}</div>
+
+                            <div class="col-lg-6 ">Tipe</div>
+                            <div class="col-lg-6 text-end">
+                                {{ $transaction->room->boardingHouse->type == 'putra' ? 'Putra' : ($transaction->room->boardingHouse->type == 'putri' ? 'Putri' : 'Campur') }}
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <div class="col-lg-5 card">
+                    <div class="card-body d-flex flex-column">
+                        <div class="mb-3">
+                            <div class="small ">Total Pembayaran</div>
+                            <div class="price">{{ formatRupiah($transaction->total) }}</div>
+                        </div>
+
+                        <div id="snap-container" class="snap-wrapper mb-3">
+                            {{-- snap.embed akan merender di sini --}}
+                            @if (empty($this->snapToken))
+                                <div class="text-center ">Token pembayaran belum tersedia. Silakan muat ulang halaman.
+                                </div>
+                            @endif
+                        </div>
+
+                        <button id="embed-button" class="btn btn-primary btn-embed mb-2"
+                            {{ empty($this->snapToken) ? 'disabled' : '' }}>
+                            <i class="bi bi-wallet2 me-2"></i> Pilih Metode Pembayaran
+                        </button>
+
+                        <button id="refresh-status" class="btn btn-outline-secondary btn-embed" wire:click="updateStatus">
+                            Perbarui Status Pembayaran
+                        </button>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    {{-- Midtrans Snap --}}
-    <script src="https://app.midtrans.com/snap/snap.js" data-client-key="{{ config('midtrans.client_key') }}"></script>
-    <script>
-        document.getElementById('pay-button').onclick = function() {
-            const snapToken = '{{ $this->snapToken }}';
+        {{-- load snap.js (sandbox/production auto) --}}
+        <script
+            src="{{ config('midtrans.is_production') ? 'https://app.midtrans.com/snap/snap.js' : 'https://app.sandbox.midtrans.com/snap/snap.js' }}"
+            data-client-key="{{ config('midtrans.client_key') }}"></script>
 
-            console.log('Initiating payment with snap token:', snapToken ? 'Token exists' : 'No token');
+        <script>
+            (function() {
+                const embedBtn = document.getElementById('embed-button');
+                const snapContainer = document.getElementById('snap-container');
+                const snapToken = @json($this->snapToken);
 
-            if (!snapToken || snapToken.trim() === '') {
-                console.error('Snap token is empty or missing');
-                alert('Error: Tidak dapat memproses pembayaran. Token pembayaran kosong.');
-                return;
-            }
+                if (!embedBtn) return;
 
-            snap.pay(snapToken, {
-                onSuccess: function(result) {
-                    console.log('Payment success:', result);
-                    window.location.href = '{{ route('transactions.index') }}';
-                },
-                onPending: function(result) {
-                    console.log('Payment pending:', result);
-                    window.location.href = '{{ route('transactions.index') }}';
-                },
-                onError: function(result) {
-                    console.error('Payment error:', result);
-                    alert('Pembayaran gagal! Silakan coba lagi atau hubungi administrator.');
-                },
-                onClose: function() {
-                    console.log('Payment popup closed');
-                }
-            });
-        };
-    </script>
-  @endvolt
+                embedBtn.addEventListener('click', function() {
+                    if (!snapToken || snapToken.trim() === '') {
+                        alert('Snap token tidak tersedia. Silakan refresh halaman atau hubungi admin.');
+                        return;
+                    }
+
+                    // clear container, then embed
+                    snapContainer.innerHTML = '';
+                    try {
+                        window.snap.embed(snapToken, {
+                            embedId: 'snap-container',
+                            onSuccess: function(result) {
+                                console.log('Midtrans success', result);
+                                alert('Pembayaran sukses.');
+                                location.reload();
+                            },
+                            onPending: function(result) {
+                                console.log('Midtrans pending', result);
+                                alert('Pembayaran menunggu.');
+                                location.reload();
+                            },
+                            onError: function(err) {
+                                console.error('Midtrans error', err);
+                                alert('Terjadi kesalahan saat memproses pembayaran.');
+                            },
+                            onClose: function() {
+                                console.log('User closed snap');
+                            }
+                        });
+                    } catch (err) {
+                        console.error('Embed error', err);
+                        alert('Gagal memuat metode pembayaran.');
+                    }
+                });
+
+                // quick dev log
+                console.log('Snap token preview:', snapToken ? (snapToken.slice(0, 10) + '...') : 'empty');
+            })();
+        </script>
+    @endvolt
 </x-guest-layout>
