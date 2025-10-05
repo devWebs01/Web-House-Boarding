@@ -10,6 +10,9 @@ use App\Services\FonnteService;
 name("catalog.show");
 
 state([
+    
+    "body" => '', 
+    "rating" => '',
     "selectedRoom" => null,
     "boardingHouse",
 
@@ -30,6 +33,7 @@ state([
         ]);
     }),
 ]);
+
 
 $selectRoom = function ($roomId) {
     $this->selectedRoom = Room::find($roomId);
@@ -55,11 +59,17 @@ $submitTransaction = function () {
 
     $this->validate([
         "duration" => "required|in:1,3,6,12",
-        "check_in" => "required|date",
+        "check_in" => "required|date|after_or_equal:today",
     ]);
 
     if (!$this->selectedRoom) {
         $this->addError("selectedRoom", "Silakan pilih kamar terlebih dahulu.");
+        return;
+    }
+
+    // Check if room is still available
+    if ($this->selectedRoom->status !== 'available') {
+        $this->addError('selectedRoom', 'Kamar yang dipilih sudah tidak tersedia.');
         return;
     }
 
@@ -104,21 +114,43 @@ $submitTransaction = function () {
                 "Terima kasih.",
             ]);
 
-            $whatsapp_number = $this->owner->identity->whatsapp_number;
+            $whatsappSent = false;
 
-            try {
-                // Kirim WhatsApp (gunakan service) (ganti ke nomor pemilik kost langsung)
-                (new FonnteService())->send($whatsapp_number, $message);
-            } catch (\Throwable $e) {
-                // Log activity jika gagal kirim WA
+            if ($this->owner->identity && $this->owner->identity->whatsapp_number) {
+                $whatsapp_number = $this->owner->identity->whatsapp_number;
+
+                try {
+                    // Kirim WhatsApp (gunakan service) (ganti ke nomor pemilik kost langsung)
+                    (new FonnteService())->send($whatsapp_number, $message);
+                    $whatsappSent = true;
+                } catch (\Throwable $e) {
+                    // Log activity jika gagal kirim WA
+                    activity()
+                        ->causedBy($user)
+                        ->withProperties([
+                            "exception" => $e->getMessage(),
+                            "phone" => $whatsapp_number,
+                            "message_excerpt" => substr($message, 0, 100) . "...",
+                        ])
+                        ->log("Gagal mengirim WhatsApp notifikasi pemesanan kamar.");
+                }
+            } else {
+                // Log jika owner tidak memiliki identity atau whatsapp_number
                 activity()
                     ->causedBy($user)
                     ->withProperties([
-                        "exception" => $e->getMessage(),
-                        "phone" => $whatsapp_number,
                         "message_excerpt" => substr($message, 0, 100) . "...",
                     ])
-                    ->log("Gagal mengirim WhatsApp notifikasi pemesanan kamar.");
+                    ->log("Tidak dapat mengirim WhatsApp notifikasi pemesanan kamar karena owner tidak memiliki whatsapp_number.");
+            }
+
+            if (!$whatsappSent) {
+                // Rollback: hapus transaksi dan kembalikan status kamar
+                $transaction->delete();
+                $this->selectedRoom->update(['status' => 'available']);
+
+                LivewireAlert::title('Proses gagal! WhatsApp tidak dapat dikirim.')->position('center')->error()->toast()->show();
+                return Redirect::back();
             }
         }
 
@@ -134,7 +166,6 @@ $submitTransaction = function () {
     }
 };
 
-state(["body", "rating"]);
 
 $comment = function () {
     if (!Auth::check()) {
@@ -153,6 +184,12 @@ $comment = function () {
         "body" => "required|string|min:5",
         "rating" => "required|in:1,2,3,4,5",
     ]);
+
+    // Check if user has already commented on this boarding house
+    if (Comment::where('user_id', auth()->id())->where('boarding_house_id', $this->boardingHouse->id)->exists()) {
+        $this->addError('body', 'Anda sudah memberikan komentar untuk kos ini.');
+        return;
+    }
 
     $validatedComment["user_id"] = auth()->user()->id;
     $validatedComment["boarding_house_id"] = $this->boardingHouse->id;
@@ -325,7 +362,7 @@ $comment = function () {
                                         </select>
 
                                         @error("duration")
-                                            <p id="check_in" class="mt-1 small text-danger">{{ $message }}</p>
+                                            <p id="duration" class="mt-1 small text-danger">{{ $message }}</p>
                                         @enderror
                                     </div>
 

@@ -40,7 +40,7 @@ $updateUser = function () {
         // Identity fields
         "phone_number" => ["required", "digits_between:10,15"],
         "whatsapp_number" => ["required", "digits_between:10,15"],
-        "id_card" => ["required", "image", "mimes:jpeg,png,jpg", "max:2048"],
+        "id_card" => ["nullable", "image", "mimes:jpeg,png,jpg"],
         "address" => ["required", "string", "min:10", "max:255"],
     ]);
 
@@ -171,7 +171,7 @@ $updateUser = function () {
                                             <span class="ms-2 text-warning">Mengunggah file...</span>
                                         </div>
 
-                                        <input type="file" name="id_card" class="form-control" wire:model="id_card">
+                                        <input type="file" name="id_card" class="form-control" wire:model="id_card" {{$identity->id_card === null ? 'required' : ''}}>
 
                                         @error("id_card")
                                             <div class="text-danger small mt-1">{{ $message }}</div>

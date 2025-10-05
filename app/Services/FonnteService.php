@@ -23,12 +23,16 @@ class FonnteService
             'countryCode' => '62', // Opsional
         ]);
 
-        return $response->json();
+        if ($response->successful()) {
+            return $response->json();
+        } else {
+            throw new \Exception('Fonnte API error: '.$response->body());
+        }
     }
 
     protected function sanitizePhone($phone)
     {
-        // Ubah 08xxx jadi 628xxx
-        return preg_replace('/^0/', '62', $phone);
+        // Hapus leading 0 jika ada, biarkan API menambahkan country code
+        return preg_replace('/^0/', '', $phone);
     }
 }
