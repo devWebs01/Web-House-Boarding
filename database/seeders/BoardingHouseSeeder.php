@@ -23,11 +23,22 @@ class BoardingHouseSeeder extends Seeder
     protected function seedUsers(): void
     {
         try {
-            if (User::count() < 5) {
-                User::factory()->count(5)->create();
-                $this->command->info('✓ 5 User berhasil dibuat sebagai pemilik.');
+            // Pastikan ada minimal 5 owner dengan identity
+            $ownersWithIdentity = User::where('role', 'owner')->whereHas('identity')->count();
+            $needed = max(0, 5 - $ownersWithIdentity);
+
+            if ($needed > 0) {
+                User::factory()->count($needed)->create(['role' => 'owner']);
+                $this->command->info("✓ {$needed} Owner dengan identity berhasil dibuat.");
             } else {
-                $this->command->info('! Sudah ada '.User::count().' User, tidak perlu membuat baru.');
+                $this->command->info('! Sudah ada '.User::where('role', 'owner')->whereHas('identity')->count().' Owner dengan identity.');
+            }
+
+            // Pastikan ada beberapa guest juga
+            $guestsWithIdentity = User::where('role', 'guest')->whereHas('identity')->count();
+            if ($guestsWithIdentity < 3) {
+                User::factory()->count(3 - $guestsWithIdentity)->create(['role' => 'guest']);
+                $this->command->info('✓ Guest dengan identity berhasil dibuat.');
             }
         } catch (Exception $e) {
             $this->command->error('✗ Gagal membuat User: '.$e->getMessage());

@@ -23,10 +23,14 @@ class FonnteService
             'countryCode' => '62', // Opsional
         ]);
 
-        if ($response->successful()) {
-            return $response->json();
+        $responseData = $response->json();
+
+        // Check if the response indicates success
+        if ($response->successful() && isset($responseData['status']) && $responseData['status'] === true) {
+            return $responseData;
         } else {
-            throw new \Exception('Fonnte API error: '.$response->body());
+            $errorMessage = $responseData['message'] ?? $response->body();
+            throw new \Exception('Fonnte API error: '.$errorMessage);
         }
     }
 

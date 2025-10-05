@@ -72,7 +72,7 @@ class BoardingHouseFactory extends Factory
             'name' => $this->faker->company.' Kos',
             'location_map' => 'https://goo.gl/maps/'.$this->faker->regexify('[A-Za-z0-9]{8}'),
             'address' => $this->faker->address,
-            'owner_id' => User::inRandomOrder()->first()->id ?? User::factory()->create()->id,
+            'owner_id' => User::whereHas('identity')->inRandomOrder()->first()->id ?? User::factory()->create()->id,
             'thumbnail' => $thumbnailPath,
             'category' => $this->faker->randomElement($categories),
             'verification_status' => $this->faker->randomElement($statuses),

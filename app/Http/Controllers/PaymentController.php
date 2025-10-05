@@ -66,15 +66,50 @@ class PaymentController extends Controller
     {
         $notification = $request->all();
 
-        // Verify the notification (you should implement signature verification)
-        // For now, just log it
+        // Verify the notification signature
+        $signature = hash('sha512', $notification['order_id'].$notification['status_code'].$notification['gross_amount'].config('midtrans.server_key'));
+
+        if ($signature !== $notification['signature_key']) {
+            Log::error('Invalid signature for callback', $notification);
+
+            return response()->json(['status' => 'error', 'message' => 'Invalid signature'], 403);
+        }
+
         Log::info('Midtrans Callback:', $notification);
 
         $orderId = $notification['order_id'];
         $status = $notification['transaction_status'];
 
-        // Update your order status based on $status
-        // e.g., if ($status == 'settlement') { // mark as paid }
+        // Find the transaction by code
+        $transaction = \App\Models\Transaction::where('code', $orderId)->first();
+
+        if (! $transaction) {
+            Log::error('Transaction not found for order_id: '.$orderId);
+
+            return response()->json(['status' => 'error', 'message' => 'Transaction not found'], 404);
+        }
+
+        // Update transaction status based on Midtrans status
+        switch ($status) {
+            case 'settlement':
+                $transaction->update(['status' => 'paid']);
+                Log::info('Transaction '.$orderId.' marked as paid');
+                break;
+            case 'pending':
+                // Keep as confirmed or pending
+                Log::info('Transaction '.$orderId.' is pending');
+                break;
+            case 'cancel':
+            case 'deny':
+            case 'expire':
+            case 'failure':
+                $transaction->update(['status' => 'cancelled']);
+                Log::info('Transaction '.$orderId.' cancelled/failed');
+                break;
+            default:
+                Log::warning('Unknown transaction status: '.$status.' for order_id: '.$orderId);
+                break;
+        }
 
         return response()->json(['status' => 'ok']);
     }

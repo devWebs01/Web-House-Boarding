@@ -1,0 +1,117 @@
+.invoice-container {
+    max-width: 900px;
+    /* Lebar maksimum container */
+    margin: 2rem auto;
+    /* Margin atas/bawah dan tengah otomatis */
+    padding: 2.5rem;
+    /* Padding lebih besar */
+    border: 1px solid #e0e0e0;
+    /* Border lebih terang */
+    border-radius: 12px;
+    /* Sudut lebih membulat */
+    background-color: #ffffff;
+    /* Latar belakang putih */
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+    /* Bayangan lebih halus */
+}
+
+.invoice-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    border-bottom: 3px solid #007bff;
+    /* Garis bawah biru */
+    padding-bottom: 1.5rem;
+}
+
+.invoice-title {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: #343a40;
+    /* Warna teks gelap */
+}
+
+.invoice-id-dates p {
+    margin-bottom: 0.25rem;
+    font-size: 0.95rem;
+}
+
+.section-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #007bff;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.table-invoice th,
+.table-invoice td {
+    padding: 0.8rem;
+    vertical-align: middle;
+}
+
+.table-invoice th {
+    background-color: #f0f8ff;
+    /* Warna latar belakang header tabel */
+    color: #007bff;
+    font-weight: 600;
+}
+
+.table-invoice tbody tr:last-child {
+    border-bottom: 1px solid #dee2e6;
+}
+
+.total-summary th,
+.total-summary td {
+    padding: 0.6rem 0.8rem;
+}
+
+.total-summary th {
+    text-align: end;
+    font-weight: 500;
+}
+
+.total-summary .total-row {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #007bff;
+    border-top: 2px solid #007bff;
+}
+
+.footer-info p {
+    font-size: 0.9rem;
+    color: #6c757d;
+}
+
+/* Print styles */
+@media print {
+    body * {
+        visibility: hidden;
+    }
+
+    .invoice-container,
+    .invoice-container * {
+        visibility: visible;
+        -webkit-print-color-adjust: exact !important;
+        /* Untuk mencetak warna latar belakang */
+        color-adjust: exact !important;
+    }
+
+    .invoice-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        border: none;
+        box-shadow: none;
+        border-radius: 0;
+    }
+
+    .d-print-none {
+        display: none !important;
+    }
+}
