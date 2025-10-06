@@ -14,6 +14,7 @@ middleware(['auth', 'role:guest']);
 
 // State: kita menerima $transaction (model instance) dari route/volt component
 state([
+    'loading' => false,
     'transaction', // expects an instance of App\Models\Transaction
 ]);
 
@@ -39,9 +40,36 @@ $snapToken = computed(function () {
         ]);
         abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
     }
+    // validate transaction data
+    try {
+        $checkIn = \Carbon\Carbon::parse($transaction->check_in);
+        $checkOut = \Carbon\Carbon::parse($transaction->check_out);
+        if ($checkIn->gte($checkOut)) {
+            Log::error('Invalid check-in/check-out dates', [
+                'transaction_id' => $transaction->id,
+                'check_in' => $transaction->check_in,
+                'check_out' => $transaction->check_out,
+            ]);
+            return '';
+        }
+        $duration = $checkIn->diffInDays($checkOut);
+        if ($duration <= 0) {
+            Log::error('Invalid duration for transaction', [
+                'transaction_id' => $transaction->id,
+                'duration' => $duration,
+            ]);
+            return '';
+        }
+    } catch (\Exception $e) {
+        Log::error('Failed to parse dates', [
+            'transaction_id' => $transaction->id,
+            'error' => $e->getMessage(),
+        ]);
+        return '';
+    }
 
-    // pick existing attribute either camelCase or snake_case
-    $existingToken = $transaction->snapToken ?? ($transaction->snap_token ?? null);
+    // pick existing attribute
+    $existingToken = $transaction->snapToken;
     if (!empty($existingToken)) {
         Log::info('Using existing snap token from DB', [
             'transaction_id' => $transaction->id,
@@ -55,7 +83,11 @@ $snapToken = computed(function () {
         $midtrans = new MidtransService();
 
         $orderId = $transaction->code;
-        $quantity = max(1, (int) ($transaction->duration ?? 1));
+        // calculate duration in days
+        $checkIn = \Carbon\Carbon::parse($transaction->check_in);
+        $checkOut = \Carbon\Carbon::parse($transaction->check_out);
+        $duration = $checkIn->diffInDays($checkOut);
+        $quantity = max(1, (int) $duration);
         $price = (int) round($transaction->room->price ?? 0);
 
         $items = [
@@ -73,7 +105,7 @@ $snapToken = computed(function () {
             $calculatedGross += ((int) $it['price']) * ((int) $it['quantity']);
         }
 
-        $grossAmount = (int) round($transaction->total ?? $calculatedGross);
+        $grossAmount = (int) round((int) $transaction->total ?? $calculatedGross);
         if ($grossAmount !== $calculatedGross) {
             Log::info('gross_amount mismatch: overriding with calculated items amount', [
                 'transaction_id' => $transaction->id,
@@ -116,22 +148,15 @@ $snapToken = computed(function () {
             return '';
         }
 
-        // store token to DB: try camelCase then snake_case
+        // store token to DB
         try {
-            // try camelCase attribute first (per model fillable)
             $transaction->update(['snapToken' => $token]);
         } catch (\Throwable $e) {
-            // fallback to snake_case column (snap_token)
-            try {
-                $transaction->update(['snap_token' => $token]);
-            } catch (\Throwable $e2) {
-                Log::error('Failed to save snap token to DB', [
-                    'transaction_id' => $transaction->id,
-                    'error1' => $e->getMessage(),
-                    'error2' => $e2->getMessage(),
-                ]);
-                // token still returned to frontend, but DB not updated
-            }
+            Log::error('Failed to save snap token to DB', [
+                'transaction_id' => $transaction->id,
+                'error' => $e->getMessage(),
+            ]);
+            // token still returned to frontend, but DB not updated
         }
 
         Log::info('Snap token created & returned', ['transaction_id' => $transaction->id, 'token_preview' => substr($token, 0, 12) . '...']);
@@ -160,63 +185,86 @@ $updateStatus = function () {
 
     try {
         $midtrans = new MidtransService();
-        // statusTransaction expects order_id (transaction->code)
         $response = $midtrans->statusTransaction($transaction->code);
 
-        // map midtrans transaction_status to local status
-        $mapping = [
-            'capture' => 'paid',
-            'settlement' => 'paid',
-            'pending' => 'pending',
-            'deny' => 'failed',
-            'cancel' => 'failed',
-            'expire' => 'expired',
-            'challenge' => 'challenge',
-        ];
-
+        // response bisa berupa object; ambil property dengan aman
         $txStatus = $response->transaction_status ?? ($response->status_code ?? null);
         $paymentType = $response->payment_type ?? null;
+        $fraudStatus = $response->fraud_status ?? null;
+        $settlementTime = $response->settlement_time ?? ($response->transaction_time ?? null);
 
-        // choose mapped status, fallback to raw
-        $localStatus = $mapping[$txStatus] ?? ($txStatus ?? 'unknown');
+        // Pemetaan Midtrans -> status lokal (sesuai enum migration kamu: pending, confirmed, paid, cancelled)
+        // Catatan: "confirmed" adalah status yang kamu gunakan ketika user konfirmasi pesanan.
+        // Setelah pembayaran settled/capture -> kita ubah menjadi "paid".
+        if ($txStatus === 'capture') {
+            // capture biasanya untuk CC; kalau fraud challenge -> pending, else paid
+            $localStatus = $paymentType === 'credit_card' && $fraudStatus === 'challenge' ? 'pending' : 'paid';
+        } elseif ($txStatus === 'settlement') {
+            $localStatus = 'paid';
+        } elseif ($txStatus === 'pending') {
+            // pembayaran belum selesai (menunggu)
+            $localStatus = 'pending';
+        } elseif (in_array($txStatus, ['deny', 'cancel', 'expire'])) {
+            $localStatus = 'cancelled';
+        } elseif ($txStatus === 'challenge') {
+            // butuh verifikasi manual
+            $localStatus = 'pending';
+        } else {
+            // unknown status -> jangan ubah status DB, log saja
+            \Log::warning('Midtrans returned unknown status', [
+                'transaction_id' => $transaction->id,
+                'midtrans_status' => $txStatus,
+            ]);
+            $localStatus = null;
+        }
 
-        // Try update transaction record with best-effort fields
-        $updateData = [
-            'status' => $localStatus,
-        ];
+        // Build update payload HANYA untuk kolom yang ada
+        $updateData = [];
+        if ($localStatus !== null && \Schema::hasColumn($transaction->getTable(), 'status')) {
+            $updateData['status'] = $localStatus;
+        }
 
-        // add some optional fields if exist on model/table
-        if (property_exists($transaction, 'payment_type') || \Schema::hasColumn($transaction->getTable(), 'payment_type')) {
+        if (\Schema::hasColumn($transaction->getTable(), 'payment_type') && $paymentType !== null) {
             $updateData['payment_type'] = $paymentType;
         }
-        if (property_exists($transaction, 'paid_at') || \Schema::hasColumn($transaction->getTable(), 'paid_at')) {
-            // settlement_time or transaction_time
-            $paidAt = $response->settlement_time ?? ($response->transaction_time ?? null);
-            if ($paidAt) {
-                $updateData['paid_at'] = $paidAt;
+
+        if (\Schema::hasColumn($transaction->getTable(), 'status_message') && isset($response->status_message)) {
+            $updateData['status_message'] = $response->status_message;
+        }
+
+        if (\Schema::hasColumn($transaction->getTable(), 'gross_amount') && isset($response->gross_amount)) {
+            $updateData['gross_amount'] = $response->gross_amount;
+        }
+
+        if (\Schema::hasColumn($transaction->getTable(), 'paid_at') && $settlementTime) {
+            // simpan paid_at jika ada
+            $updateData['paid_at'] = $settlementTime;
+        }
+
+        if (!empty($updateData)) {
+            try {
+                $transaction->update($updateData);
+            } catch (\Throwable $e) {
+                \Log::warning('Failed to update transaction columns (maybe schema mismatch)', [
+                    'transaction_id' => $transaction->id,
+                    'error' => $e->getMessage(),
+                    'attempted' => $updateData,
+                ]);
             }
         }
 
-        try {
-            $transaction->update($updateData);
-        } catch (\Throwable $e) {
-            Log::warning('Failed to update transaction columns (maybe schema mismatch)', [
-                'transaction_id' => $transaction->id,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        Log::info('Midtrans status checked', [
+        \Log::info('Midtrans status checked', [
             'transaction_id' => $transaction->id,
             'midtrans_status' => $txStatus,
-            'local_status' => $localStatus,
+            'mapped_status' => $localStatus,
+            'payment_type' => $paymentType,
         ]);
 
-        $this->alert('success', 'Status pembayaran diperbarui: ' . strtoupper($localStatus), ['position' => 'center', 'toast' => true]);
+        $this->alert('success', 'Status pembayaran diperbarui: ' . strtoupper($localStatus ?? 'unchanged'), ['position' => 'center', 'toast' => true]);
 
         return redirect()->route('transactions.show', ['transaction' => $transaction->id]);
     } catch (\Exception $e) {
-        Log::error('Error checking Midtrans status: ' . $e->getMessage(), ['transaction_id' => $transaction->id]);
+        \Log::error('Error checking Midtrans status: ' . $e->getMessage(), ['transaction_id' => $transaction->id]);
         $msg = $e instanceof ValidationException ? implode('<br>', $e->validator->errors()->all()) : 'Terjadi kesalahan saat mengecek status Midtrans.';
         return $this->alert('error', 'Error pengecekan Midtrans!<br>' . $msg, ['position' => 'center', 'timer' => 4000, 'toast' => true]);
     }
@@ -227,7 +275,6 @@ $updateStatus = function () {
 <x-guest-layout>
     @volt
         <style>
-            /* minimal improved styles */
             .price {
                 color: #0d6efd;
                 font-weight: 700;
@@ -236,91 +283,133 @@ $updateStatus = function () {
 
             .btn-embed {
                 width: 100%;
-                padding: .75rem;
+                padding: 0.75rem;
                 font-size: 1rem;
             }
 
             .snap-wrapper {
-                min-height: 520px;
+                min-height: 420px;
                 width: 100%;
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                border: 1px dashed #ddd;
+                border-radius: 0.75rem;
+                background-color: #f8f9fa;
+            }
+
+            .transaction-summary .row>div {
+                padding: 0.4rem 0;
+            }
+
+            .badge {
+                font-size: 0.85rem;
+                text-transform: capitalize;
             }
         </style>
 
-        <div class="container">
-            <div class="row py-5 gap-2 justify-content-between">
-                <div class="col-lg-6 card">
-                    <div class="card-body">
-                        <div class="mt-1 mb-3">
-                            <div class="small ">Kode Transaksis</div>
-                            <div class="price">{{ $transaction->code }}</div>
-                        </div>
-                        <div class="d-flex gap-3 align-items-start">
-                            <img src="{{ $transaction->room->boardingHouse->thumbnail ? Storage::url($transaction->room->boardingHouse->thumbnail) : 'https://dummyimage.com/140x90/ddd/777&text=No+Img' }}"
-                                style="width:140px;height:90px;object-fit:cover;border-radius:.5rem" alt="thumbnail">
-                            <div>
-                                <h6 class="mb-1">{{ $transaction->room->boardingHouse->name }}</h6>
-                                <div class="small mb-2">
-                                    Kamar {{ $transaction->room->room_number }}</div>
-                                <div class="small mb-2">
-                                    Ukuran {{ $transaction->room->size }} m²</div>
-                                <div class="small">{{ $transaction->room->boardingHouse->address }}</div>
+        <div class="container py-5">
+            <div class="row g-4">
+                {{-- DETAIL TRANSAKSI --}}
+                <div class="col-lg-6">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-body">
+                            <div class="mb-4">
+                                <div class="text-muted small">Kode Transaksi</div>
+                                <div class="price">{{ $transaction->code }}</div>
+                            </div>
+
+                            <div class="d-flex gap-3 mb-3 align-items-start">
+                                <img src="{{ $transaction->room->boardingHouse->thumbnail ? Storage::url($transaction->room->boardingHouse->thumbnail) : 'https://dummyimage.com/140x90/ddd/777&text=No+Img' }}"
+                                    alt="thumbnail" class="rounded" style="width:140px;height:90px;object-fit:cover;">
+                                <div>
+                                    <h6 class="mb-1">{{ $transaction->room->boardingHouse->name }}</h6>
+                                    <div class="small text-muted">
+                                        Kamar {{ $transaction->room->room_number }}<br>
+                                        Ukuran {{ $transaction->room->size }} m²<br>
+                                        {{ $transaction->room->boardingHouse->address }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <hr>
+
+                            <div class="transaction-summary">
+                                <div class="row">
+                                    <div class="col-6">Check-in</div>
+                                    <div class="col-6 text-end">
+                                        {{ \Carbon\Carbon::parse($transaction->check_in)->translatedFormat('d M Y') }}
+                                    </div>
+
+                                    <div class="col-6">Check-out</div>
+                                    <div class="col-6 text-end">
+                                        {{ \Carbon\Carbon::parse($transaction->check_out)->translatedFormat('d M Y') }}
+                                    </div>
+
+                                    <div class="col-6">Durasi Sewa</div>
+                                    <div class="col-6 text-end">
+                                        {{ \Carbon\Carbon::parse($transaction->check_in)->diffInDays(\Carbon\Carbon::parse($transaction->check_out)) }}
+                                        hari
+                                    </div>
+
+                                    <div class="col-6">Harga per Hari</div>
+                                    <div class="col-6 text-end">{{ formatRupiah($transaction->room->price) }}</div>
+
+                                    <div class="col-6 fw-semibold">Total Pembayaran</div>
+                                    <div class="col-6 fw-semibold text-end">{{ formatRupiah($transaction->total) }}</div>
+
+                                    <div class="col-6">Tipe Kos</div>
+                                    <div class="col-6 text-end">
+                                        {{ ucfirst($transaction->room->boardingHouse->type) }}
+                                    </div>
+
+                                    <div class="col-6">Status Transaksi</div>
+                                    <div class="col-6 text-end">
+                                        <span
+                                            class="badge bg-{{ $transaction->status === 'paid' ? 'success' : ($transaction->status === 'cancelled' ? 'danger' : 'warning') }}">
+                                            {{ ucfirst($transaction->status) }}
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-
-                        <hr>
-
-                        <div class="row g-2">
-                            <div class="col-lg-12 ">Ringkasan Pesanan</div>
-
-                            <div class="col-lg-6 ">Check-in</div>
-                            <div class="col-lg-6 text-end">
-                                {{ \Carbon\Carbon::parse($transaction->check_in)->translatedFormat('d M Y') }}</div>
-
-                            <div class="col-lg-6 ">Check-out</div>
-                            <div class="col-lg-6 text-end">
-                                {{ \Carbon\Carbon::parse($transaction->check_out)->translatedFormat('d M Y') }}</div>
-
-                            <div class="col-lg-6 ">Tipe</div>
-                            <div class="col-lg-6 text-end">
-                                {{ $transaction->room->boardingHouse->type == 'putra' ? 'Putra' : ($transaction->room->boardingHouse->type == 'putri' ? 'Putri' : 'Campur') }}
-                            </div>
-                        </div>
-
                     </div>
                 </div>
 
-                <div class="col-lg-5 card">
-                    <div class="card-body d-flex flex-column">
-                        <div class="mb-3">
-                            <div class="small ">Total Pembayaran</div>
-                            <div class="price">{{ formatRupiah($transaction->total) }}</div>
+                {{-- PEMBAYARAN MIDTRANS --}}
+                <div class="col-lg-5">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-body d-flex flex-column">
+                            <div class="mb-4">
+                                <div class="text-muted small">Total Pembayaran</div>
+                                <div class="price">{{ formatRupiah($transaction->total) }}</div>
+                            </div>
+
+                            <div id="snap-container" class="snap-wrapper mb-3">
+                                @if (empty($this->snapToken))
+                                    <div class="text-center text-muted">
+                                        Token pembayaran belum tersedia.<br>Silakan muat ulang halaman.
+                                    </div>
+                                @endif
+                            </div>
+
+                            <button id="embed-button" class="btn btn-primary btn-embed mb-2" wire:loading.attr="disabled"
+                                {{ empty($this->snapToken) ? 'disabled' : '' }}>
+                                <span wire:loading.remove><i class="bi bi-wallet2 me-2"></i>Pilih Metode Pembayaran</span>
+                                <span wire:loading><i class="spinner-border spinner-border-sm me-2"></i>Memuat...</span>
+                            </button>
+
+                            <button id="refresh-status" class="btn btn-outline-secondary btn-embed"
+                                wire:click="updateStatus">
+                                <i class="bi bi-arrow-clockwise me-2"></i> Perbarui Status Pembayaran
+                            </button>
                         </div>
-
-                        <div id="snap-container" class="snap-wrapper mb-3">
-                            {{-- snap.embed akan merender di sini --}}
-                            @if (empty($this->snapToken))
-                                <div class="text-center ">Token pembayaran belum tersedia. Silakan muat ulang halaman.
-                                </div>
-                            @endif
-                        </div>
-
-                        <button id="embed-button" class="btn btn-primary btn-embed mb-2"
-                            {{ empty($this->snapToken) ? 'disabled' : '' }}>
-                            <i class="bi bi-wallet2 me-2"></i> Pilih Metode Pembayaran
-                        </button>
-
-                        <button id="refresh-status" class="btn btn-outline-secondary btn-embed" wire:click="updateStatus">
-                            Perbarui Status Pembayaran
-                        </button>
                     </div>
                 </div>
             </div>
         </div>
 
-        {{-- load snap.js (sandbox/production auto) --}}
+        {{-- Snap.js Loader --}}
         <script
             src="{{ config('midtrans.is_production') ? 'https://app.midtrans.com/snap/snap.js' : 'https://app.sandbox.midtrans.com/snap/snap.js' }}"
             data-client-key="{{ config('midtrans.client_key') }}"></script>
@@ -339,7 +428,6 @@ $updateStatus = function () {
                         return;
                     }
 
-                    // clear container, then embed
                     snapContainer.innerHTML = '';
                     try {
                         window.snap.embed(snapToken, {
@@ -368,7 +456,6 @@ $updateStatus = function () {
                     }
                 });
 
-                // quick dev log
                 console.log('Snap token preview:', snapToken ? (snapToken.slice(0, 10) + '...') : 'empty');
             })();
         </script>
