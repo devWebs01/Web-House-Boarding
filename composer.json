@@ -23,11 +23,6 @@
     "require-dev": {
         "fakerphp/faker": "^1.9.1",
         "laravel/pint": "^1.0",
-<<<<<<< HEAD
-        "laravel/sail": "^1.46",
-=======
-        "laravel/sail": "^1.45",
->>>>>>> 27a1671912b19ed42b41a38f0eae7eaa8cf3061e
         "mockery/mockery": "^1.4.4",
         "nunomaduro/collision": "^7.0",
         "phpunit/phpunit": "^10.1",
