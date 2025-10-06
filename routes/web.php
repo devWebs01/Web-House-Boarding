@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\PaymentController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
@@ -26,7 +27,7 @@ Route::get('/home', [HomeController::class, 'index'])->name('home');
 Route::get('/wa', function () {
     $fonnte = new \App\Services\FonnteService;
 
-    $userPhone = '6282282432437'; // pastikan nomor aktif & terdaftar
+    $userPhone = '6285951572182'; // pastikan nomor aktif & terdaftar
     $message = 'WOIIIIIIIIIIIIIIIII Halo! Ini adalah pesan tes dari sistem Laravel.';
     $fonnte->send($userPhone, $message);
 
@@ -103,3 +104,9 @@ Route::get('/laravel/{file}', function ($file) {
         return redirect()->back()->with('error', 'File backup tidak ditemukan.');
     }
 })->name('backup.delete');
+
+// Payment Routes
+Route::post('/payment/create', [PaymentController::class, 'createPayment'])->name('payment.create');
+Route::post('/payment/callback', [PaymentController::class, 'handleCallback'])->name('payment.callback');
+Route::get('/payment/status/{orderId}', [PaymentController::class, 'getStatus'])->name('payment.status');
+Route::post('/payment/cancel/{orderId}', [PaymentController::class, 'cancelTransaction'])->name('payment.cancel');

@@ -18,6 +18,7 @@ class Transaction extends Model
         'check_out',
         'total',
         'status',
+        'snapToken',
     ];
 
     // Relasi ke user (penyewa)

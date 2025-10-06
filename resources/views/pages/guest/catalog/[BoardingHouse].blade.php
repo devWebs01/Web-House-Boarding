@@ -1,39 +1,43 @@
 <?php
 
-use App\Models\{Room, Transaction, Comment};
-use function Livewire\Volt\{state, computed, on};
+use Carbon\Carbon;
+use App\Models\{Room};
+use function Livewire\Volt\{state, computed};
 use function Laravel\Folio\{name};
 use Jantinnerezo\LivewireAlert\Facades\LivewireAlert;
-use Carbon\Carbon;
-use App\Services\FonnteService;
+use App\Services\TransactionService;
+use App\Services\NotificationService;
+use App\Services\PaymentService;
 
-name("catalog.show");
+name('catalog.show');
 
 state([
-    "selectedRoom" => null,
-    "boardingHouse",
+    'body' => '',
+    'rating' => '',
+    'selectedRoom' => null,
+    'boardingHouse',
 
-    "owner" => fn() => $this->boardingHouse->owner,
-    "identity" => fn() => $this->boardingHouse->owner->identity,
-    "minimum_rental_period" => fn() => $this->boardingHouse->minimum_rental_period,
+    'owner' => fn() => $this->boardingHouse->owner,
+    'identity' => fn() => $this->boardingHouse->owner->identity,
+    'minimum_rental_period' => fn() => $this->boardingHouse->minimum_rental_period,
 
-    "duration" => "",
-    "check_in" => "",
-    "rooms" => fn() => $this->boardingHouse->rooms->map(function ($room) {
-        $isAvailable = $room->status === "available";
+    'duration' => '',
+    'check_in' => '',
+    'rooms' => fn() => $this->boardingHouse->rooms->map(function ($room) {
+        $isAvailable = $room->status === 'available';
 
         return (object) array_merge($room->toArray(), [
-            "isAvailable" => $isAvailable,
-            "statusClass" => $isAvailable ? "success" : "danger",
-            "statusIcon" => $isAvailable ? "check" : "x",
-            "buttonClass" => $isAvailable ? "primary" : "secondary disabled",
+            'isAvailable' => $isAvailable,
+            'statusClass' => $isAvailable ? 'success' : 'danger',
+            'statusIcon' => $isAvailable ? 'check' : 'x',
+            'buttonClass' => $isAvailable ? 'primary' : 'secondary disabled',
         ]);
     }),
 ]);
 
 $selectRoom = function ($roomId) {
     $this->selectedRoom = Room::find($roomId);
-    $this->dispatch("updateTotalPrice");
+    $this->dispatch('updateTotalPrice');
 };
 
 $total = computed(function () {
@@ -45,135 +49,73 @@ $total = computed(function () {
 });
 
 $submitTransaction = function () {
+    // --- VALIDATION / AUTH CHECK ---
     if (!Auth::check()) {
-        return Redirect::route("login");
+        return Redirect::route('login');
     }
 
-    if (!Auth()->User()->identity) {
-        return Redirect::route("profile.guest");
+    if (!Auth::user()->identity) {
+        return Redirect::route('profile.guest');
     }
 
-    $this->validate([
-        "duration" => "required|in:1,3,6,12",
-        "check_in" => "required|date",
-    ]);
-
-    if (!$this->selectedRoom) {
-        $this->addError("selectedRoom", "Silakan pilih kamar terlebih dahulu.");
-        return;
-    }
+    $transactionService = new TransactionService();
+    $notificationService = new NotificationService();
+    $paymentService = new PaymentService();
 
     try {
         $user = Auth::user();
 
-        // Buat kode transaksi yang lebih unik dan aman
-        $transactionCode = "INV-" . now()->format("dmY-His") . "-" . strtoupper(Str::random(4));
-
-        // Hitung check-out
+        $code = 'INV-' . now()->format('dmY-His') . '-' . strtoupper(Str::random(4));
         $checkOut = Carbon::parse($this->check_in)->addMonths($this->duration);
 
-        // Simpan transaksi
-        $transaction = Transaction::create([
-            "user_id" => $user->id,
-            "boarding_house_id" => $this->boardingHouse->id,
-            "room_id" => $this->selectedRoom->id,
-            "code" => $transactionCode,
-            "check_in" => $this->check_in,
-            "check_out" => $checkOut,
-            "total" => $this->total,
-        ]);
-        if ($transaction) {
-            $this->selectedRoom->update(["status" => "booked"]);
+        $payload = [
+            'user_id' => $user->id,
+            'boarding_house_id' => $this->boardingHouse->id,
+            'room_id' => $this->selectedRoom->id,
+            'code' => $code,
+            'check_in' => $this->check_in,
+            'check_out' => $checkOut,
+            'duration' => $this->duration,
+            'total' => $this->total,
+        ];
 
-            // Format pesan WhatsApp
-            $message = implode("\n", [
-                "Dear PIC Pemesanan Kos,\n",
-                "Berikut ini terlampir data penyewa yang melakukan pemesanan kamar kos melalui sistem:\n",
-                formatField("Kode Transaksi", $transactionCode),
-                formatField("Nama Penyewa", $user->name),
-                formatField("Nomor HP", $user->identity->phone_number),
-                formatField("Nomor Whatsapp", $user->identity->whatsapp_number),
-                formatField("Email Penyewa", $user->email) . "\n",
-                formatField("Nama Kos", $this->selectedRoom->boardingHouse->name ?? null),
-                formatField("Nomor Kamar", "Kamar " . $this->selectedRoom->room_number ?? null),
-                formatField("Jadwal Check-In", Carbon::parse($this->check_in)->translatedFormat("d-m-Y")),
-                formatField("Jadwal Check-Out", Carbon::parse($checkOut)->translatedFormat("d-m-Y")),
-                formatField("Total Pembayaran", formatRupiah($this->total)),
-                formatField("Status Transaksi", "Menunggu Konfirmasi"),
-                "\nMohon pastikan bahwa Anda telah melakukan konfirmasi ulang terhadap pemesanan kamar ini kepada pelanggan melalui Nomor HP/Whatapp Penyewa yang tertera selambat-lambatnya 1 x 24 jam.\n",
-                "Terima kasih.",
-            ]);
+        // create transaction (atomic inside service)
+        $transaction = $transactionService->createTransaction($payload);
 
-            $whatsapp_number = $this->owner->identity->whatsapp_number;
+        // notify owner
+        $ownerPhone = $this->owner->identity->whatsapp_number ?? null;
+        $waOk = $notificationService->notifyOwner($transaction, $ownerPhone);
 
-            try {
-                // Kirim WhatsApp (gunakan service) (ganti ke nomor pemilik kost langsung)
-                (new FonnteService())->send($whatsapp_number, $message);
-            } catch (\Throwable $e) {
-                // Log activity jika gagal kirim WA
-                activity()
-                    ->causedBy($user)
-                    ->withProperties([
-                        "exception" => $e->getMessage(),
-                        "phone" => $whatsapp_number,
-                        "message_excerpt" => substr($message, 0, 100) . "...",
-                    ])
-                    ->log("Gagal mengirim WhatsApp notifikasi pemesanan kamar.");
-            }
+        if (!$waOk) {
+            // kebijakan: rollback atau tetap simpan? di sini rollback
+            $transactionService->cancelAndReleaseRoom($transaction);
+
+            LivewireAlert::title('Proses gagal! WhatsApp tidak dapat dikirim.')->position('center')->error()->toast()->show();
+            return Redirect::back();
         }
 
-        LivewireAlert::title("Proses Berhasil!")->position("center")->success()->toast()->show();
+        // generate snap token, simpan ke DB (pastikan kolom snap_token ada)
+        $token = $paymentService->generateSnapToken($transaction, 60);
+        $transactionService->update($transaction, ['snap_token' => $token]);
 
-        return Redirect::route("transactions.index");
-    } catch (\Throwable $th) {
-        report($th); // log error ke Laravel log
+        LivewireAlert::title('Proses Berhasil!')->position('center')->success()->toast()->show();
+        return Redirect::route('transactions.show', ['transaction' => $transaction->id]);
+    } catch (\Throwable $e) {
+        report($e);
+        // jika transaction sudah dibuat, cleanup
+        if (!empty($transaction) && $transaction->exists) {
+            $transactionService->cancelAndReleaseRoom($transaction);
+        }
 
-        LivewireAlert::title("Proses gagal!")->position("center")->error()->toast()->show();
-
+        LivewireAlert::title('Proses gagal!')->position('center')->error()->toast()->show();
         return Redirect::back();
-    }
-};
-
-state(["body", "rating"]);
-
-$comment = function () {
-    if (!Auth::check()) {
-        return Redirect::route("login");
-    }
-
-    if (!Auth()->User()->identity) {
-        return Redirect::route("profile.guest");
-    }
-
-    if (in_array(Auth()->user()->role, ["owner", "admin"])) {
-        return Redirect::route("home");
-    }
-
-    $validatedComment = $this->validate([
-        "body" => "required|string|min:5",
-        "rating" => "required|in:1,2,3,4,5",
-    ]);
-
-    $validatedComment["user_id"] = auth()->user()->id;
-    $validatedComment["boarding_house_id"] = $this->boardingHouse->id;
-
-    try {
-        Comment::create($validatedComment);
-
-        LivewireAlert::title("Proses Berhasil!")->position("center")->success()->toast()->show();
-
-        return Redirect::route("catalog.show", ["boardingHouse" => $this->boardingHouse]);
-    } catch (\Throwable $th) {
-        LivewireAlert::title("Proses Gagal!")->position("center")->error()->toast()->show();
-
-        return Redirect::route("catalog.show", ["boardingHouse" => $this->boardingHouse]);
     }
 };
 
 ?>
 
 <x-guest-layout>
-    @include("components.partials.fancybox")
+    @include('components.partials.fancybox')
 
     @volt
         <div class="container my-5">
@@ -182,9 +124,9 @@ $comment = function () {
                 <div class="col-lg-6">
                     <div class="kos-gallery">
                         <a data-fancybox
-                            data-src="{{ $boardingHouse->thumbnail ? Storage::url($boardingHouse->thumbnail) : "https://dummyimage.com/600x400/000/bfbfbf&text=no+image" }}"
+                            data-src="{{ $boardingHouse->thumbnail ? Storage::url($boardingHouse->thumbnail) : 'https://dummyimage.com/600x400/000/bfbfbf&text=no+image' }}"
                             data-caption="thumbnail">
-                            <img src="{{ $boardingHouse->thumbnail ? Storage::url($boardingHouse->thumbnail) : "https://dummyimage.com/600x400/000/bfbfbf&text=no+image" }}"
+                            <img src="{{ $boardingHouse->thumbnail ? Storage::url($boardingHouse->thumbnail) : 'https://dummyimage.com/600x400/000/bfbfbf&text=no+image' }}"
                                 class="img object-fit-cover mb-3 border" alt="Foto Utama Kos" width="100%" height="500px">
                         </a>
 
@@ -207,7 +149,7 @@ $comment = function () {
                     <div class="card shadow-0 border-0">
                         <div class="card-body">
                             <p>
-                                <span class="badge bg-primary">{{ __("category." . $boardingHouse->category) }}</span>
+                                <span class="badge bg-primary">{{ __('category.' . $boardingHouse->category) }}</span>
                             </p>
                             <h1 class="h3 fw-bold">{{ $boardingHouse->name }}</h1>
                             <p class="text-muted">
@@ -244,7 +186,7 @@ $comment = function () {
                                                         <li>
                                                             <i class="bi bi-whatsapp me-2"></i>
                                                             <strong>WhatsApp:</strong>
-                                                            <a href="https://wa.me/{{ preg_replace("/[^0-9]/", "", $identity->whatsapp_number) }}"
+                                                            <a href="https://wa.me/{{ preg_replace('/[^0-9]/', '', $identity->whatsapp_number) }}"
                                                                 target="_blank"
                                                                 class="text-success text-decoration-underline">
                                                                 {{ $identity->whatsapp_number }}
@@ -285,7 +227,7 @@ $comment = function () {
                                     <div class="col-12 mb-3">
                                         <input type="text" id="roomId" class="form-control" aria-describedby="helpId"
                                             placeholder="kamar yang dipilih"
-                                            value="{{ $selectedRoom !== null ? "Kamar " . $selectedRoom->room_number : "" }}"
+                                            value="{{ $selectedRoom !== null ? 'Kamar ' . $selectedRoom->room_number : '' }}"
                                             readonly />
 
                                     </div>
@@ -294,9 +236,9 @@ $comment = function () {
                                         <label for="check_in" class="form-label">Tanggal Mulai</label>
                                         <input type="date" wire:model="check_in" class="form-control form-control-sm"
                                             name="check_in" id="check_in" aria-describedby="check_in"
-                                            min="{{ today()->format("Y-m-d") }}" placeholder="check_in" />
+                                            min="{{ today()->format('Y-m-d') }}" placeholder="check_in" />
 
-                                        @error("check_in")
+                                        @error('check_in')
                                             <p id="check_in" class="mt-1 small text-danger">{{ $message }}</p>
                                         @enderror
                                     </div>
@@ -306,26 +248,26 @@ $comment = function () {
                                         <select wire:model.live="duration" class="form-select form-select-sm"
                                             name="duration" id="duration">
                                             <option value="">Pilih Durasi</option>
-                                            <option value="1" @selected($duration == "1")
+                                            <option value="1" @selected($duration == '1')
                                                 @disabled($minimum_rental_period > 1)>
                                                 Per 1 Bulan
                                             </option>
-                                            <option value="3" @selected($duration == "3")
+                                            <option value="3" @selected($duration == '3')
                                                 @disabled($minimum_rental_period > 3)>
                                                 Per 3 Bulan
                                             </option>
-                                            <option value="6" @selected($duration == "6")
+                                            <option value="6" @selected($duration == '6')
                                                 @disabled($minimum_rental_period > 6)>
                                                 Per 6 Bulan
                                             </option>
-                                            <option value="12" @selected($duration == "12")
+                                            <option value="12" @selected($duration == '12')
                                                 @disabled($minimum_rental_period > 12)>
                                                 Per 1 Tahun
                                             </option>
                                         </select>
 
-                                        @error("duration")
-                                            <p id="check_in" class="mt-1 small text-danger">{{ $message }}</p>
+                                        @error('duration')
+                                            <p id="duration" class="mt-1 small text-danger">{{ $message }}</p>
                                         @enderror
                                     </div>
 
@@ -336,21 +278,21 @@ $comment = function () {
                                             <tbody>
                                                 <tr>
                                                     <td>
-                                                        {{ formatRupiah($selectedRoom->price ?? "0") }}
+                                                        {{ formatRupiah($selectedRoom->price ?? '0') }}
                                                     </td>
                                                     <td class="text-center">X</td>
-                                                    <td class="text-end">{{ $duration ?? "0" }} Bulan</td>
+                                                    <td class="text-end">{{ $duration ?? '0' }} Bulan</td>
                                                 </tr>
                                                 <tr class="fw-bolder">
                                                     <td>Total</td>
                                                     <td colspan="2" class="text-end">
-                                                        {{ formatRupiah($this->total ?? "0") }}</td>
+                                                        {{ formatRupiah($this->total ?? '0') }}</td>
                                                 </tr>
                                             </tbody>
                                         </table>
 
                                         <button type="submit" wire:loading.attr="disabled"
-                                            class="{{ !empty($selectedRoom) ? "" : "disabled" }} w-100 btn btn-primary">
+                                            class="{{ !empty($selectedRoom) ? '' : 'disabled' }} w-100 btn btn-primary">
 
                                             <span wire:loading.remove>
                                                 Submit
@@ -415,7 +357,7 @@ $comment = function () {
 
                                         <span class="badge bg-{{ $room->statusClass }}">
                                             <i class="bi bi-{{ $room->statusIcon }}-circle me-1"></i>
-                                            {{ __("room_status." . $room->status) }}
+                                            {{ __('room_status.' . $room->status) }}
                                         </span>
                                     </div>
 
@@ -439,7 +381,7 @@ $comment = function () {
                 @endforeach
             </section>
 
-            @include("pages.guest.catalog.review")
+            @include('pages.guest.catalog.review', ['boardingHouse' => $boardingHouse])
 
         </div>
     @endvolt

@@ -17,10 +17,11 @@ return new class extends Migration
             $table->foreignId('room_id')->constrained()->onDelete('cascade'); // Kos yang dipesan
             $table->foreignId('boarding_house_id')->constrained()->onDelete('cascade'); // Kos yang dipesan
             $table->string('code')->unique(); // Kode transaksi unik
+            $table->string('snapToken')->nullable(); // Token Snap
             $table->date('check_in');
             $table->date('check_out');
             $table->string('total'); // total pembayaran
-            $table->enum('status', ['pending', 'confirmed', 'cancelled'])->default('pending');
+            $table->enum('status', ['pending', 'confirmed', 'paid', 'cancelled'])->default('pending');
             $table->timestamps();
         });
     }
