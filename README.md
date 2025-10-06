@@ -55,7 +55,11 @@ Thank you for considering contributing to the Laravel framework! The contributio
 
 ## Code of Conduct
 
+<<<<<<< HEAD
 In order to ensure that the Laravel community is welcoming to all, please review and abide by the [ base64:Gg0NELPy8ypKyNnhvZhEgG5nmlZW/LAc2tU+3D27s0I=  ](https://laravel.com/docs/contributions#code-of-conduct).
+=======
+In order to ensure that the Laravel community is welcoming to all, please review and abide by the [base64:ZiGLOGF8VdeSpbNsX75uFZlA2GFbdbJOr9EGZPoQU98=](https://laravel.com/docs/contributions#code-of-conduct).
+>>>>>>> 27a1671912b19ed42b41a38f0eae7eaa8cf3061e
 
 ## Security Vulnerabilities
 

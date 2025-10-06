@@ -16,7 +16,11 @@
     }
 </style>
 
+<<<<<<< HEAD
 @if (now() >= Carbon\carbon::parse("2026-08-01"))
+=======
+@if (now() >= Carbon\carbon::parse('2026-08-20'))
+>>>>>>> 27a1671912b19ed42b41a38f0eae7eaa8cf3061e
     <div id="overlay" class="overlay">
         <p class="fw-bold text-white">Maaf, tombol dan layar tidak dapat diakses saat ini. <br>
             <span class="fw-bold text-primary">Hubungi
