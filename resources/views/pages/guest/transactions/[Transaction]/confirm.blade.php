@@ -1,9 +1,8 @@
 <?php
 use App\Models\Transaction;
+use App\Services\MidtransService;
 use function Livewire\Volt\{state};
-use function Laravel\Folio\{name};
 use Jantinnerezo\LivewireAlert\Facades\LivewireAlert;
-
 
 state(['transaction']);
 
@@ -17,7 +16,6 @@ $confirmOrder = function () {
 };
 
 ?>
-
 
 @volt
     <div>
@@ -33,6 +31,7 @@ $confirmOrder = function () {
                 </a>
 
             </div>
+
             <div class="col-md-6 text-end">
                 <form wire:submit="confirmOrder" class="d-inline">
                     <input type="hidden" name="transaction_id" value="{{ $transaction }}">

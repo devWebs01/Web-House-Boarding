@@ -17,7 +17,8 @@ state(['transaction']);
     @volt
         <div class="invoice-container mt-5 pt-5" id="invoice">
 
-            <img src="https://placehold.co/100x40/007bff/ffffff?text=E-KOST" alt="Company Logo" class="img-fluid mb-3 rounded">
+            <img src="https://placehold.co/100x40/007bff/ffffff?text={{ $transaction->status }}" alt="Company Logo"
+                class="img-fluid mb-3 rounded">
             <div class="invoice-header-top">
                 <div>
 
@@ -28,7 +29,8 @@ state(['transaction']);
                     <p class="text-muted mb-0">Kode Transaksi: <span
                             class="fw-bold text-primary">{{ $transaction->code }}</span>
                     </p>
-                    <p class="text-muted mb-0">Tanggal Transaksi: <span class="fw-bold text-primary">{{ $transaction->created_at->format('d-m-Y H:i') }}</span>
+                    <p class="text-muted mb-0">Tanggal Transaksi: <span
+                            class="fw-bold text-primary">{{ $transaction->created_at->format('d-m-Y H:i') }}</span>
                     </p>
 
                 </div>
@@ -91,7 +93,8 @@ state(['transaction']);
                                 Bulan
                             </div>
                             <div class="col-3 text-end text-nowrap">
-                                {{ formatRupiah($transaction->room->price) }}</div>
+                                {{ formatRupiah($transaction->room->price * \Carbon\Carbon::parse($transaction->check_in)->diffInMonths($transaction->check_out)) }}
+                            </div>
 
                         </div>
                     </li>
@@ -99,7 +102,9 @@ state(['transaction']);
                 </ul>
             </div>
 
-            @include('pages.guest.transactions.[Transaction].confirm', ['transaction' => $transaction])
+            @if ($transaction->status !== 'paid')
+                @include('pages.guest.transactions.[Transaction].confirm', ['transaction' => $transaction])
+            @endif
 
             <div class="text-center mt-5 pt-4 border-top footer-info">
                 <p class="lead fw-semibold mb-2 text-primary">Terima kasih!</p>
