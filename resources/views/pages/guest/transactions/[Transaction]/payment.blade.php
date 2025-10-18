@@ -264,6 +264,15 @@ $snapToken = computed(function () {
         </style>
 
         <div class="container py-5">
+            <div class="alert alert-warning d-flex align-items-center" role="alert">
+                <span class="fs-3 bi flex-shrink-0 me-2" role="img" aria-label="Warning:">
+                    ⚠️
+                </span>
+                <div>
+                    Anda saat ini berada di <strong>mode testing</strong>.
+                    Klik tombol <b>"Simulator Pembayaran"</b> untuk melakukan uji coba pembayaran.
+                </div>
+            </div>
             <div class="row g-4">
                 {{-- DETAIL TRANSAKSI --}}
                 <div class="col-lg-6">
@@ -366,7 +375,7 @@ $snapToken = computed(function () {
                                     <button id="embed-button" class="btn btn-primary btn-sm btn-embed"
                                         wire:loading.attr="disabled" {{ empty($this->snapToken) ? 'disabled' : '' }}>
                                         <span wire:loading.remove>
-                                            Pilih Metode Pembayaran
+                                            Pilih Opsi Pembayaran
                                         </span>
                                         <span wire:loading>
                                             <i class="spinner-border spinner-border-sm me-2"></i>Memuat...
