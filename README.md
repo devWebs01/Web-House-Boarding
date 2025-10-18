@@ -71,114 +71,122 @@ E-Kos adalah platform web modern untuk pencarian, booking, dan manajemen rumah k
 
 #### Entity Relationship Diagram (ERD)
 
-ERD lengkap sistem E-Kos telah dibuat dalam format Mermaid dan disimpan dalam file [`ERD.mmd`](ERD.mmd) di root directory project.
-
 **Diagram Interaktif:**
 
 ```mermaid
 erDiagram
-    USER ||--o{ BOARDING_HOUSE : owns
-    USER ||--o{ TRANSACTION : makes
-    USER ||--|| IDENTITY : has
+    USER ||--o{ BOARDING_HOUSE : "owns"
+    USER ||--o{ TRANSACTION : "makes"
+    USER ||--|| IDENTITY : "has"
+    USER ||--o{ COMMENT : "writes"
+    
+    BOARDING_HOUSE ||--o{ ROOM : "contains"
+    BOARDING_HOUSE ||--o{ FACILITY : "provides"
+    BOARDING_HOUSE ||--o{ REGULATION : "has"
+    BOARDING_HOUSE ||--o{ GALLERY : "showcases"
+    BOARDING_HOUSE ||--o{ TRANSACTION : "receives"
+    BOARDING_HOUSE ||--o{ COMMENT : "receives"
+    
+    ROOM ||--o{ TRANSACTION : "booked_in"
 
-    BOARDING_HOUSE ||--o{ ROOM : contains
-    BOARDING_HOUSE ||--o{ FACILITY : provides
-    BOARDING_HOUSE ||--o{ REGULATION : has
-    BOARDING_HOUSE ||--o{ GALLERY : showcases
-    BOARDING_HOUSE ||--o{ TRANSACTION : receives
-    BOARDING_HOUSE ||--o{ COMMENT : receives
-
-    ROOM ||--o{ TRANSACTION : booked_in
-
-    USER } {
-        int id PK
-        string name
-        string email
-        string password
-        string role
-        timestamp email_verified_at
-        timestamps created_at, updated_at
+    USER {
+        int id PK "Primary Key"
+        string name "Nama lengkap pengguna"
+        string email UK "Email unik pengguna"
+        string password "Password terenkripsi"
+        enum role "guest, owner, admin"
+        timestamp email_verified_at "Waktu verifikasi email"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    BOARDING_HOUSE } {
-        int id PK
-        string name
-        text address
-        string location_map
-        int owner_id FK
-        string thumbnail
-        string category
-        string verification_status
-        int minimum_rental_period
-        timestamps created_at, updated_at
+    IDENTITY {
+        int id PK "Primary Key"
+        int user_id FK "ID pengguna"
+        string full_name "Nama lengkap"
+        string phone_number "Nomor telepon"
+        string whatsapp_number "Nomor WhatsApp"
+        text address "Alamat pengguna"
+        string profile_picture "Foto profil"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    ROOM } {
-        int id PK
-        int boarding_house_id FK
-        string room_number
-        decimal price
-        decimal size
-        string status
-        timestamps created_at, updated_at
+    BOARDING_HOUSE {
+        int id PK "Primary Key"
+        string name "Nama rumah kost"
+        text address "Alamat lengkap"
+        string location_map "Link atau koordinat map"
+        int owner_id FK "ID pemilik kost"
+        string thumbnail "Path foto thumbnail"
+        enum type "putra, putri, campur"
+        enum verification_status "pending, approved, rejected"
+        int minimum_rental_period "Minimal periode sewa (bulan)"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    TRANSACTION } {
-        int id PK
-        int user_id FK
-        int boarding_house_id FK
-        int room_id FK
-        string code
-        date check_in
-        date check_out
-        decimal total
-        string status
-        string snapToken
-        timestamps created_at, updated_at
+    ROOM {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string room_number "Nomor kamar"
+        decimal price "Harga sewa per hari/bulan"
+        decimal size "Ukuran kamar (m2)"
+        enum status "available, booked, maintenance"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    FACILITY } {
-        int id PK
-        int boarding_house_id FK
-        string name
-        string icon
-        timestamps created_at, updated_at
+    TRANSACTION {
+        int id PK "Primary Key"
+        int user_id FK "ID penyewa"
+        int boarding_house_id FK "ID rumah kost"
+        int room_id FK "ID kamar yang dipesan"
+        string code UK "Kode unik transaksi"
+        date check_in "Tanggal masuk kost"
+        date check_out "Tanggal keluar kost"
+        decimal total "Total pembayaran"
+        enum status "pending, paid, cancelled"
+        string snapToken "Token pembayaran Midtrans"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    REGULATION } {
-        int id PK
-        int boarding_house_id FK
-        string title
-        text description
-        timestamps created_at, updated_at
+    FACILITY {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string name "Nama fasilitas"
+        string icon "Icon fasilitas"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    GALLERY } {
-        int id PK
-        int boarding_house_id FK
-        string image_path
-        string caption
-        timestamps created_at, updated_at
+    REGULATION {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string title "Judul peraturan"
+        text description "Deskripsi peraturan"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    COMMENT } {
-        int id PK
-        int boarding_house_id FK
-        int user_id FK
-        text content
-        int rating
-        timestamps created_at, updated_at
+    GALLERY {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string image_path "Path file gambar"
+        string caption "Keterangan gambar"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 
-    IDENTITY } {
-        int id PK
-        int user_id FK
-        string full_name
-        string phone_number
-        string whatsapp_number
-        text address
-        string profile_picture
-        timestamps created_at, updated_at
+    COMMENT {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        int user_id FK "ID pengguna yang komentar"
+        text content "Isi komentar"
+        int rating "Rating 1-5"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
     }
 ```
 
@@ -187,27 +195,122 @@ erDiagram
 - `||--||` : One-to-One relationship
 - `PK` : Primary Key
 - `FK` : Foreign Key
-- `timestamps` : Laravel's automatic timestamps (created_at, updated_at)
+- `UK` : Unique Key
 
-**File ERD Lengkap:**
-- File [`ERD.mmd`](ERD.mmd) berisi diagram ERD dengan dokumentasi detail setiap tabel
-- Format Mermaid yang dapat digunakan untuk presentasi atau dokumentasi
-- Dapat di-render di GitHub, GitLab, dan tools lain yang mendukung Mermaid
+**Penjelasan Relasi:**
 
-#### Relasi Database
+| Relasi | Tipe | Deskripsi |
+|--------|------|-----------|
+| USER → BOARDING_HOUSE | One-to-Many | Satu user (owner) dapat memiliki banyak kost |
+| USER → TRANSACTION | One-to-Many | Satu user dapat melakukan banyak transaksi |
+| USER → IDENTITY | One-to-One | Setiap user memiliki satu data identitas |
+| USER → COMMENT | One-to-Many | Satu user dapat menulis banyak komentar |
+| BOARDING_HOUSE → ROOM | One-to-Many | Satu kost memiliki banyak kamar |
+| BOARDING_HOUSE → FACILITY | One-to-Many | Satu kost memiliki banyak fasilitas |
+| BOARDING_HOUSE → REGULATION | One-to-Many | Satu kost memiliki banyak peraturan |
+| BOARDING_HOUSE → GALLERY | One-to-Many | Satu kost memiliki banyak foto galeri |
+| BOARDING_HOUSE → TRANSACTION | One-to-Many | Satu kost dapat menerima banyak transaksi |
+| BOARDING_HOUSE → COMMENT | One-to-Many | Satu kost dapat menerima banyak komentar |
+| ROOM → TRANSACTION | One-to-Many | Satu kamar dapat dibooking berkali-kali |
+
+#### Struktur Tabel Detail
+
+**Table: users**
+```sql
+CREATE TABLE users (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    role ENUM('guest', 'owner', 'admin') NOT NULL DEFAULT 'guest',
+    email_verified_at TIMESTAMP NULL,
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL,
+    INDEX idx_role (role),
+    INDEX idx_email (email)
+);
 ```
-User (1) ─── (N) BoardingHouse (owner_id)
-User (1) ─── (N) Transaction (user_id)
-User (1) ─── (1) Identity
 
-BoardingHouse (1) ─── (N) Room (boarding_house_id)
-BoardingHouse (1) ─── (N) Facility (boarding_house_id)
-BoardingHouse (1) ─── (N) Regulation (boarding_house_id)
-BoardingHouse (1) ─── (N) Gallery (boarding_house_id)
-BoardingHouse (1) ─── (N) Transaction (boarding_house_id)
-BoardingHouse (1) ─── (N) Comment (boarding_house_id)
+**Table: identities**
+```sql
+CREATE TABLE identities (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(20),
+    whatsapp_number VARCHAR(20),
+    address TEXT,
+    profile_picture VARCHAR(255),
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_user_id (user_id)
+);
+```
 
-Room (1) ─── (N) Transaction (room_id)
+**Table: boarding_houses**
+```sql
+CREATE TABLE boarding_houses (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    address TEXT NOT NULL,
+    location_map VARCHAR(500),
+    owner_id BIGINT UNSIGNED NOT NULL,
+    thumbnail VARCHAR(255),
+    type ENUM('putra', 'putri', 'campur') NOT NULL,
+    verification_status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+    minimum_rental_period INT DEFAULT 1,
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL,
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_owner_id (owner_id),
+    INDEX idx_type (type),
+    INDEX idx_verification_status (verification_status)
+);
+```
+
+**Table: rooms**
+```sql
+CREATE TABLE rooms (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    boarding_house_id BIGINT UNSIGNED NOT NULL,
+    room_number VARCHAR(50) NOT NULL,
+    price DECIMAL(12, 2) NOT NULL,
+    size DECIMAL(8, 2),
+    status ENUM('available', 'booked', 'maintenance') DEFAULT 'available',
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL,
+    FOREIGN KEY (boarding_house_id) REFERENCES boarding_houses(id) ON DELETE CASCADE,
+    INDEX idx_boarding_house_id (boarding_house_id),
+    INDEX idx_status (status),
+    INDEX idx_price (price)
+);
+```
+
+**Table: transactions**
+```sql
+CREATE TABLE transactions (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    boarding_house_id BIGINT UNSIGNED NOT NULL,
+    room_id BIGINT UNSIGNED NOT NULL,
+    code VARCHAR(100) NOT NULL UNIQUE,
+    check_in DATE NOT NULL,
+    check_out DATE NOT NULL,
+    total DECIMAL(12, 2) NOT NULL,
+    status ENUM('pending', 'paid', 'cancelled') DEFAULT 'pending',
+    snapToken TEXT,
+    created_at TIMESTAMP NULL,
+    updated_at TIMESTAMP NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (boarding_house_id) REFERENCES boarding_houses(id) ON DELETE CASCADE,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
+    INDEX idx_user_id (user_id),
+    INDEX idx_boarding_house_id (boarding_house_id),
+    INDEX idx_room_id (room_id),
+    INDEX idx_status (status),
+    INDEX idx_code (code)
+);
 ```
 
 ### Struktur Direktori
@@ -235,6 +338,7 @@ resources/
 ├── js/             # JavaScript files
 ├── sass/           # Sass files
 └── views/          # Blade templates
+
 routes/              # Route definitions
 storage/             # File storage
 ```
@@ -380,21 +484,6 @@ QUEUE_CONNECTION=sync
 SESSION_DRIVER=file
 SESSION_LIFETIME=120
 
-MEMCACHED_HOST=127.0.0.1
-
-REDIS_HOST=127.0.0.1
-REDIS_PASSWORD=null
-REDIS_PORT=6379
-
-MAIL_MAILER=smtp
-MAIL_HOST=mailpit
-MAIL_PORT=1025
-MAIL_USERNAME=null
-MAIL_PASSWORD=null
-MAIL_ENCRYPTION=null
-MAIL_FROM_ADDRESS="hello@example.com"
-MAIL_FROM_NAME="${APP_NAME}"
-
 # Payment Gateway
 MIDTRANS_SERVER_KEY=your_server_key
 MIDTRANS_CLIENT_KEY=your_client_key
@@ -402,13 +491,6 @@ MIDTRANS_IS_PRODUCTION=false
 
 # WhatsApp API
 FONNTE_API_KEY=your_fonnte_api_key
-
-# File Storage
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_DEFAULT_REGION=us-east-1
-AWS_BUCKET=
-AWS_USE_PATH_STYLE_ENDPOINT=false
 ```
 
 ## 🎯 Penggunaan Aplikasi
@@ -444,29 +526,6 @@ php artisan serve
 - **Laporan Sistem**: Lihat laporan aktivitas dan transaksi
 - **Backup Data**: Kelola sistem backup database
 
-### 3. Contoh Penggunaan API
-
-#### Payment API
-```php
-// Membuat transaksi pembayaran
-POST /payment/create
-{
-    "order_id": "TRX-20250101-001",
-    "gross_amount": 1500000,
-    "customer_name": "John Doe",
-    "customer_email": "john@example.com",
-    "item_name": "Kamar Kost Premium",
-    "quantity": 1,
-    "price": 1500000
-}
-```
-
-#### Payment Callback (Webhook)
-```php
-// Midtrans akan mengirim callback ke endpoint ini
-POST /payment/callback
-```
-
 ## 🔌 API Endpoints
 
 ### Payment Endpoints
@@ -485,6 +544,7 @@ POST /payment/callback
 ## 📊 Monitoring & Logging
 
 ### Activity Logging
+
 Sistem menggunakan Spatie Laravel Activity Log untuk mencatat aktivitas pengguna:
 
 ```php
@@ -495,6 +555,7 @@ $user->save(); // Otomatis dicatat dalam log
 ```
 
 ### Backup System
+
 Sistem backup otomatis dapat dijalankan dengan:
 
 ```bash
@@ -540,38 +601,6 @@ php artisan test --coverage
 php artisan test --filter=UserTest
 ```
 
-### Menulis Tests
-
-```php
-<?php
-
-namespace Tests\Feature;
-
-use Tests\TestCase;
-use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-
-class UserTest extends TestCase
-{
-    use RefreshDatabase;
-
-    public function test_user_can_register()
-    {
-        $response = $this->post('/register', [
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-            'password' => 'password',
-            'password_confirmation' => 'password',
-        ]);
-
-        $response->assertRedirect('/home');
-        $this->assertDatabaseHas('users', [
-            'email' => 'test@example.com',
-        ]);
-    }
-}
-```
-
 ## 🚀 Deployment
 
 ### Production Deployment
@@ -607,43 +636,6 @@ class UserTest extends TestCase
    chown -R www-data:www-data storage
    ```
 
-### Web Server Configuration
-
-#### Nginx Configuration
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com;
-    root /path/to/your/project/public;
-
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-Content-Type-Options "nosniff";
-
-    index index.php;
-
-    charset utf-8;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location = /favicon.ico { access_log off; log_not_found off; }
-    location = /robots.txt  { access_log off; log_not_found off; }
-
-    error_page 404 /index.php;
-
-    location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
-    }
-
-    location ~ /\.(?!well-known).* {
-        deny all;
-    }
-}
-```
-
 ## 🤝 Kontribusi
 
 ### Cara Berkontribusi
@@ -655,31 +647,11 @@ server {
 5. Buat Pull Request
 
 ### Guidelines Kontribusi
-
 - Ikuti PSR-12 coding standards
 - Tulis tests untuk fitur baru
 - Update dokumentasi jika diperlukan
 - Pastikan semua tests lolos
 - Gunakan conventional commits
-
-### Conventional Commits Format
-
-```
-type(scope): description
-
-[optional body]
-
-[optional footer]
-```
-
-Types:
-- `feat`: Fitur baru
-- `fix`: Perbaikan bug
-- `docs`: Dokumentasi
-- `style`: Perubahan styling
-- `refactor`: Refactoring kode
-- `test`: Menambah tests
-- `chore`: Maintenance
 
 ## 📝 Lisensi
 
@@ -691,13 +663,8 @@ Proyek ini menggunakan lisensi MIT. Lihat file [LICENSE](LICENSE) untuk detail l
 - **Email**: dev@ekos.com
 - **Phone**: +62 xxx-xxxx-xxxx
 
-### Dokumentasi API
-- **Swagger Documentation**: `/api/documentation`
-- **Postman Collection**: Tersedia di repository
-
 ### Issue & Bug Report
 - **GitHub Issues**: [Buat Issue Baru](https://github.com/username/repository/issues)
-- **Bug Template**: Gunakan template yang disediakan
 
 ## 🔄 Update & Maintenance
 
@@ -729,24 +696,6 @@ php artisan view:clear
 # Backup database
 php artisan backup:run
 ```
-
-## 📈 Performance Optimization
-
-### Caching Strategy
-- **Route Caching**: `php artisan route:cache`
-- **Config Caching**: `php artisan config:cache`
-- **View Caching**: `php artisan view:cache`
-- **Application Caching**: Menggunakan Redis untuk cache
-
-### Database Optimization
-- **Indexing**: Index pada kolom yang sering di-query
-- **Query Optimization**: Menggunakan Eloquent efficiently
-- **Database Connection Pooling**: Konfigurasi pooling untuk production
-
-### Asset Optimization
-- **CSS/JS Minification**: Menggunakan Vite untuk production build
-- **Image Optimization**: Menggunakan Spatie Image Optimizer
-- **Lazy Loading**: Implementasi lazy loading untuk gambar
 
 ## 🔧 Troubleshooting
 
