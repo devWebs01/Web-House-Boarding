@@ -3,45 +3,59 @@
 use App\Models\Transaction;
 use App\Services\MidtransService;
 use Carbon\Carbon;
-use function Livewire\Volt\{state, computed, uses};
+use function Livewire\Volt\{state, computed, mount};
 use function Laravel\Folio\{name, middleware};
 use Illuminate\Support\Facades\Log;
 
 name('transactions.payment');
-middleware(['auth', 'role:guest']);
+middleware(['auth']); // PENTING: Pastikan user sudah login
 
-// State: kita menerima $transaction (model instance) dari route/volt component
+// State
 state([
     'loading' => false,
-    'transaction', // expects an instance of App\Models\Transaction
+    'transaction',
+    'isAuthorized' => false,
 ]);
 
 /**
- * computed snapToken:
- *  - bila $transaction sudah punya snapToken / snap_token -> gunakan
- *  - jika belum -> generate via MidtransService dan simpan ke DB
+ * Mount: Validasi ownership saat component di-load
+ */
+mount(function () {
+    // Pastikan transaction tersedia
+    if (!$this->transaction || !$this->transaction->id) {
+        Log::warning('Payment view without transaction instance');
+        abort(404, 'Transaksi tidak ditemukan.');
+    }
+
+    // Ownership check - pindah ke mount agar cek sebelum render
+    // if ($this->transaction->user_id !== auth()->id()) {
+    //     Log::warning('Unauthorized access to payment page', [
+    //         'transaction_id' => $this->transaction->id,
+    //         'user_id' => auth()->id(),
+    //         'transaction_user_id' => $this->transaction->user_id,
+    //     ]);
+    //     abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
+    // }
+
+    $this->isAuthorized = true;
+});
+
+/**
+ * Computed snapToken:
+ * Hanya generate token jika authorized
  */
 $snapToken = computed(function () {
-    $transaction = $this->transaction;
-
-    // safety: pastikan model terisi
-    if (!$transaction || !$transaction->id) {
-        Log::warning('Payment view without transaction instance');
+    if (!$this->isAuthorized) {
         return '';
     }
 
-    // ownership check
-    if ($transaction->user_id !== auth()->id()) {
-        Log::warning('Unauthorized access to payment page', [
-            'transaction_id' => $transaction->id,
-            'user_id' => auth()->id(),
-        ]);
-        abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
-    }
-    // validate transaction data
+    $transaction = $this->transaction;
+
+    // Validasi data transaksi
     try {
-        $checkIn = \Carbon\Carbon::parse($transaction->check_in);
-        $checkOut = \Carbon\Carbon::parse($transaction->check_out);
+        $checkIn = Carbon::parse($transaction->check_in);
+        $checkOut = Carbon::parse($transaction->check_out);
+
         if ($checkIn->gte($checkOut)) {
             Log::error('Invalid check-in/check-out dates', [
                 'transaction_id' => $transaction->id,
@@ -50,6 +64,7 @@ $snapToken = computed(function () {
             ]);
             return '';
         }
+
         $duration = $checkIn->diffInDays($checkOut);
         if ($duration <= 0) {
             Log::error('Invalid duration for transaction', [
@@ -66,8 +81,9 @@ $snapToken = computed(function () {
         return '';
     }
 
-    // pick existing attribute
-    $existingToken = $transaction->snapToken;
+    // Cek apakah sudah ada token di database
+    $existingToken = $transaction->snapToken ?? ($transaction->snap_token ?? null);
+
     if (!empty($existingToken)) {
         Log::info('Using existing snap token from DB', [
             'transaction_id' => $transaction->id,
@@ -76,18 +92,19 @@ $snapToken = computed(function () {
         return $existingToken;
     }
 
-    // Build & validate params before calling Midtrans
+    // Generate token baru
     try {
         $midtrans = new MidtransService();
-
         $orderId = $transaction->code;
-        // calculate duration in days
-        $checkIn = \Carbon\Carbon::parse($transaction->check_in);
-        $checkOut = \Carbon\Carbon::parse($transaction->check_out);
+
+        // Hitung durasi
+        $checkIn = Carbon::parse($transaction->check_in);
+        $checkOut = Carbon::parse($transaction->check_out);
         $duration = $checkIn->diffInDays($checkOut);
         $quantity = max(1, (int) $duration);
         $price = (int) round($transaction->room->price ?? 0);
 
+        // Item details
         $items = [
             [
                 'id' => 'room-' . ($transaction->room->id ?? '0'),
@@ -97,15 +114,16 @@ $snapToken = computed(function () {
             ],
         ];
 
-        // ensure gross amount matches items
+        // Hitung gross amount
         $calculatedGross = 0;
-        foreach ($items as $it) {
-            $calculatedGross += ((int) $it['price']) * ((int) $it['quantity']);
+        foreach ($items as $item) {
+            $calculatedGross += ((int) $item['price']) * ((int) $item['quantity']);
         }
 
         $grossAmount = (int) round((int) $transaction->total ?? $calculatedGross);
+
         if ($grossAmount !== $calculatedGross) {
-            Log::info('gross_amount mismatch: overriding with calculated items amount', [
+            Log::info('Gross amount mismatch: using calculated items amount', [
                 'transaction_id' => $transaction->id,
                 'declared' => $transaction->total ?? null,
                 'calculated' => $calculatedGross,
@@ -114,56 +132,78 @@ $snapToken = computed(function () {
         }
 
         if ($grossAmount <= 0) {
-            Log::error('Invalid gross amount for transaction', ['transaction_id' => $transaction->id, 'gross' => $grossAmount]);
+            Log::error('Invalid gross amount', [
+                'transaction_id' => $transaction->id,
+                'gross' => $grossAmount,
+            ]);
             return '';
         }
 
+        // Customer details
         $customer = [
             'first_name' => $transaction->user->name ?? 'Customer',
             'email' => $transaction->user->email ?? '',
-            // try both identity phone & whatsapp
             'phone' => $transaction->user->identity->phone_number ?? ($transaction->user->identity->whatsapp_number ?? ''),
         ];
 
-        // build params via service helper (if available) or manual
+        // Build transaction params
+        $params = [
+            'transaction_details' => [
+                'order_id' => $orderId,
+                'gross_amount' => $grossAmount,
+            ],
+            'customer_details' => $customer,
+            'item_details' => $items,
+        ];
+
+        // Generate snap token
+        $token = null;
+
         if (method_exists($midtrans, 'buildSnapParams')) {
-            $params = $midtrans->buildSnapParams($orderId, $grossAmount, $customer, $items, 60);
-            // use getSnapToken (if service supports it) or createTransaction
+            $snapParams = $midtrans->buildSnapParams($orderId, $grossAmount, $customer, $items, 60);
+
             if (method_exists($midtrans, 'getSnapToken')) {
-                $token = $midtrans->getSnapToken($params);
+                $token = $midtrans->getSnapToken($snapParams);
             } else {
-                $result = $midtrans->createTransaction(['transaction_details' => ['order_id' => $orderId, 'gross_amount' => $grossAmount], 'customer_details' => $customer, 'item_details' => $items]);
+                $result = $midtrans->createTransaction($snapParams);
                 $token = $result->token ?? ($result->snap_token ?? null);
             }
         } else {
-            // fallback to createTransaction signature (older service)
-            $result = $midtrans->createTransaction(['transaction_details' => ['order_id' => $orderId, 'gross_amount' => $grossAmount], 'customer_details' => $customer, 'item_details' => $items]);
+            $result = $midtrans->createTransaction($params);
             $token = $result->token ?? ($result->snap_token ?? null);
         }
 
         if (empty($token)) {
-            Log::error('Midtrans returned empty token', ['transaction_id' => $transaction->id]);
+            Log::error('Midtrans returned empty token', [
+                'transaction_id' => $transaction->id,
+            ]);
             return '';
         }
 
-        // store token to DB
+        // Simpan token ke database
         try {
             $transaction->update(['snapToken' => $token]);
+            Log::info('Snap token saved to database', [
+                'transaction_id' => $transaction->id,
+            ]);
         } catch (\Throwable $e) {
             Log::error('Failed to save snap token to DB', [
                 'transaction_id' => $transaction->id,
                 'error' => $e->getMessage(),
             ]);
-            // token still returned to frontend, but DB not updated
         }
 
-        Log::info('Snap token created & returned', ['transaction_id' => $transaction->id, 'token_preview' => substr($token, 0, 12) . '...']);
+        Log::info('Snap token generated successfully', [
+            'transaction_id' => $transaction->id,
+            'token_preview' => substr($token, 0, 12) . '...',
+        ]);
 
         return $token;
     } catch (\Exception $ex) {
         Log::error('Failed to generate snap token', [
             'transaction_id' => $transaction->id,
             'error' => $ex->getMessage(),
+            'trace' => $ex->getTraceAsString(),
         ]);
         return '';
     }
@@ -205,9 +245,34 @@ $snapToken = computed(function () {
                 font-size: 0.85rem;
                 text-transform: capitalize;
             }
+
+            .loading-spinner {
+                display: inline-block;
+                width: 2rem;
+                height: 2rem;
+                border: 3px solid rgba(13, 110, 253, 0.2);
+                border-top-color: #0d6efd;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+
+            @keyframes spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
         </style>
 
         <div class="container py-5">
+            <div class="alert alert-warning d-flex align-items-center" role="alert">
+                <span class="fs-3 bi flex-shrink-0 me-2" role="img" aria-label="Warning:">
+                    ⚠️
+                </span>
+                <div>
+                    Anda saat ini berada di <strong>mode testing</strong>.
+                    Klik tombol <b>"Simulator Pembayaran"</b> untuk melakukan uji coba pembayaran.
+                </div>
+            </div>
             <div class="row g-4">
                 {{-- DETAIL TRANSAKSI --}}
                 <div class="col-lg-6">
@@ -219,8 +284,13 @@ $snapToken = computed(function () {
                             </div>
 
                             <div class="d-flex gap-3 mb-3 align-items-start">
-                                <img src="{{ $transaction->room->boardingHouse->thumbnail ? Storage::url($transaction->room->boardingHouse->thumbnail) : 'https://dummyimage.com/140x90/ddd/777&text=No+Img' }}"
-                                    alt="thumbnail" class="rounded" style="width:140px;height:90px;object-fit:cover;">
+                                @php
+                                    $thumbnail = $transaction->room->boardingHouse->thumbnail
+                                        ? Storage::url($transaction->room->boardingHouse->thumbnail)
+                                        : 'https://dummyimage.com/140x90/ddd/777&text=No+Img';
+                                @endphp
+                                <img src="{{ $thumbnail }}" alt="thumbnail" class="rounded"
+                                    style="width:140px;height:90px;object-fit:cover;">
                                 <div>
                                     <h6 class="mb-1">{{ $transaction->room->boardingHouse->name }}</h6>
                                     <div class="small text-muted">
@@ -264,8 +334,14 @@ $snapToken = computed(function () {
 
                                     <div class="col-6">Status Transaksi</div>
                                     <div class="col-6 text-end">
-                                        <span
-                                            class="badge bg-{{ $transaction->status === 'paid' ? 'success' : ($transaction->status === 'cancelled' ? 'danger' : 'warning') }}">
+                                        @php
+                                            $statusColor = match ($transaction->status) {
+                                                'paid' => 'success',
+                                                'cancelled' => 'danger',
+                                                default => 'warning',
+                                            };
+                                        @endphp
+                                        <span class="badge bg-{{ $statusColor }}">
                                             {{ ucfirst($transaction->status) }}
                                         </span>
                                     </div>
@@ -276,7 +352,7 @@ $snapToken = computed(function () {
                 </div>
 
                 {{-- PEMBAYARAN MIDTRANS --}}
-                <div class="col-lg-5">
+                <div class="col-lg-6">
                     <div class="card shadow-sm border-0">
                         <div class="card-body d-flex flex-column">
                             <div class="mb-4">
@@ -287,16 +363,45 @@ $snapToken = computed(function () {
                             <div id="snap-container" class="snap-wrapper mb-3">
                                 @if (empty($this->snapToken))
                                     <div class="text-center text-muted">
-                                        Token pembayaran belum tersedia.<br>Silakan muat ulang halaman.
+                                        <div class="loading-spinner mb-2"></div>
+                                        <div>Memuat pembayaran...</div>
+                                        <small>Jika tidak muncul, silakan muat ulang halaman</small>
                                     </div>
                                 @endif
                             </div>
 
-                            <button id="embed-button" class="btn btn-primary btn-embed mb-2" wire:loading.attr="disabled"
-                                {{ empty($this->snapToken) ? 'disabled' : '' }}>
-                                <span wire:loading.remove><i class="bi bi-wallet2 me-2"></i>Pilih Metode Pembayaran</span>
-                                <span wire:loading><i class="spinner-border spinner-border-sm me-2"></i>Memuat...</span>
-                            </button>
+                            <div class="row mb-3 gap-3">
+                                <div class="col-md">
+                                    <button id="embed-button" class="btn btn-primary btn-sm btn-embed"
+                                        wire:loading.attr="disabled" {{ empty($this->snapToken) ? 'disabled' : '' }}>
+                                        <span wire:loading.remove>
+                                            Pilih Opsi Pembayaran
+                                        </span>
+                                        <span wire:loading>
+                                            <i class="spinner-border spinner-border-sm me-2"></i>Memuat...
+                                        </span>
+                                    </button>
+                                </div>
+
+                                {{-- Tampilkan hanya jika mode sandbox --}}
+                                @if (!config('midtrans.is_production'))
+                                    <div class="col-md-6">
+                                        <a href="https://simulator.sandbox.midtrans.com/bca/va/index"
+                                            class="btn btn-secondary btn-embed" target="_blank" rel="noopener noreferrer">
+                                            Simulator Pembayaran
+                                        </a>
+                                    </div>
+                                @endif
+                            </div>
+
+                            @if (empty($this->snapToken))
+                                <div class="alert alert-info mb-2">
+                                    <small>
+                                        <i class="bi bi-info-circle me-1"></i>
+                                        Token pembayaran sedang diproses. Mohon tunggu beberapa saat.
+                                    </small>
+                                </div>
+                            @endif
 
                             @include('pages.guest.transactions.[Transaction].check-status', [
                                 'transaction' => $transaction,
@@ -318,7 +423,16 @@ $snapToken = computed(function () {
                 const snapContainer = document.getElementById('snap-container');
                 const snapToken = @json($this->snapToken);
 
-                if (!embedBtn) return;
+                if (!embedBtn) {
+                    console.error('Embed button not found');
+                    return;
+                }
+
+                // Auto-enable button when token is available
+                if (snapToken && snapToken.trim() !== '') {
+                    embedBtn.disabled = false;
+                    console.log('Snap token loaded:', snapToken.slice(0, 10) + '...');
+                }
 
                 embedBtn.addEventListener('click', function() {
                     if (!snapToken || snapToken.trim() === '') {
@@ -326,35 +440,45 @@ $snapToken = computed(function () {
                         return;
                     }
 
-                    snapContainer.innerHTML = '';
+                    // Clear container
+                    snapContainer.innerHTML = '<div class="text-center"></div>';
+
                     try {
                         window.snap.embed(snapToken, {
                             embedId: 'snap-container',
                             onSuccess: function(result) {
-                                console.log('Midtrans success', result);
-                                alert('Pembayaran sukses.');
-                                location.reload();
+                                console.log('Payment success:', result);
+                                alert('Pembayaran berhasil! Halaman akan dimuat ulang.');
+                                setTimeout(() => location.reload(), 1000);
                             },
                             onPending: function(result) {
-                                console.log('Midtrans pending', result);
-                                alert('Pembayaran menunggu.');
-                                location.reload();
+                                console.log('Payment pending:', result);
+                                alert('Pembayaran sedang diproses. Halaman akan dimuat ulang.');
+                                setTimeout(() => location.reload(), 1000);
                             },
                             onError: function(err) {
-                                console.error('Midtrans error', err);
-                                alert('Terjadi kesalahan saat memproses pembayaran.');
+                                console.error('Payment error:', err);
+                                alert(
+                                    'Terjadi kesalahan saat memproses pembayaran. Silakan coba lagi.'
+                                );
+                                snapContainer.innerHTML =
+                                    '<div class="text-center text-danger"><i class="bi bi-x-circle fs-1"></i><div>Gagal memuat pembayaran</div></div>';
                             },
                             onClose: function() {
-                                console.log('User closed snap');
+                                console.log('User closed payment popup');
+                                snapContainer.innerHTML =
+                                    '<div class="text-center text-muted">Pembayaran dibatalkan. Klik tombol untuk mencoba lagi.</div>';
                             }
                         });
                     } catch (err) {
-                        console.error('Embed error', err);
-                        alert('Gagal memuat metode pembayaran.');
+                        console.error('Snap embed error:', err);
+                        alert('Gagal memuat metode pembayaran. Silakan refresh halaman.');
+                        snapContainer.innerHTML =
+                            '<div class="text-center text-danger">Gagal memuat pembayaran</div>';
                     }
                 });
 
-                console.log('Snap token preview:', snapToken ? (snapToken.slice(0, 10) + '...') : 'empty');
+                console.log('Payment page initialized');
             })();
         </script>
     @endvolt

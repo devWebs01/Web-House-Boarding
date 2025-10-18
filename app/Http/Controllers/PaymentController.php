@@ -51,7 +51,13 @@ class PaymentController extends Controller
         ];
 
         try {
-            $response = $this->midtransService->createTransaction($transactionDetails, $customerDetails, $itemDetails);
+            // Build complete params array for Midtrans
+            $params = array_merge($transactionDetails, [
+                'customer_details' => $customerDetails,
+                'item_details' => $itemDetails,
+            ]);
+
+            $response = $this->midtransService->createTransaction($params);
 
             return response()->json($response);
         } catch (\Exception $e) {
@@ -70,7 +76,11 @@ class PaymentController extends Controller
         $signature = hash('sha512', $notification['order_id'].$notification['status_code'].$notification['gross_amount'].config('midtrans.server_key'));
 
         if ($signature !== $notification['signature_key']) {
-            Log::error('Invalid signature for callback', $notification);
+            Log::error('Invalid signature for callback', [
+                'expected' => $signature,
+                'received' => $notification['signature_key'] ?? 'null',
+                'order_id' => $notification['order_id'] ?? 'null',
+            ]);
 
             return response()->json(['status' => 'error', 'message' => 'Invalid signature'], 403);
         }

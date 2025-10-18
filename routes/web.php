@@ -110,3 +110,10 @@ Route::post('/payment/create', [PaymentController::class, 'createPayment'])->nam
 Route::post('/payment/callback', [PaymentController::class, 'handleCallback'])->name('payment.callback');
 Route::get('/payment/status/{orderId}', [PaymentController::class, 'getStatus'])->name('payment.status');
 Route::post('/payment/cancel/{orderId}', [PaymentController::class, 'cancelTransaction'])->name('payment.cancel');
+
+// Transaction Payment Route (for displaying payment page)
+Route::middleware(['auth'])->group(function () {
+    Route::get('/transactions/{transaction}/payment', function (App\Models\Transaction $transaction) {
+        return view('pages.guest.transactions.[Transaction].payment', ['transaction' => $transaction]);
+    })->name('transactions.payment');
+});

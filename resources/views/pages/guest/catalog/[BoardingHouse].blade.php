@@ -66,6 +66,7 @@ $submitTransaction = function () {
         $user = Auth::user();
 
         $code = 'INV-' . now()->format('dmY-His') . '-' . strtoupper(Str::random(4));
+
         $checkOut = Carbon::parse($this->check_in)->addMonths((int) $this->duration);
 
         $payload = [
@@ -75,7 +76,7 @@ $submitTransaction = function () {
             'code' => $code,
             'check_in' => $this->check_in,
             'check_out' => $checkOut,
-            'duration' => $this->duration,
+            'duration' => (int) $this->duration,
             'total' => $this->total,
         ];
 
