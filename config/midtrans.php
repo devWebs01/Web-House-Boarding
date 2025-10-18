@@ -17,6 +17,10 @@ return [
 
     'is_production' => env('MIDTRANS_IS_PRODUCTION', false),
 
+    // Additional configuration for better error handling
+    'append_notif_url' => env('MIDTRANS_APPEND_NOTIF_URL'),
+    'override_notif_url' => env('MIDTRANS_OVERRIDE_NOTIF_URL'),
+
     'is_sanitized' => true,
 
     'is_3ds' => true,

@@ -8,7 +8,6 @@ use function Laravel\Folio\{name, middleware};
 use Illuminate\Support\Facades\Log;
 
 name('transactions.payment');
-middleware(['auth', 'role:guest']);
 
 // State: kita menerima $transaction (model instance) dari route/volt component
 state([
@@ -31,10 +30,11 @@ $snapToken = computed(function () {
     }
 
     // ownership check
-    if ($transaction->user_id !== auth()->id()) {
+    if (!$transaction || $transaction->user_id !== auth()->id()) {
         Log::warning('Unauthorized access to payment page', [
-            'transaction_id' => $transaction->id,
+            'transaction_id' => $transaction->id ?? 'null',
             'user_id' => auth()->id(),
+            'transaction_user_id' => $transaction->user_id ?? 'null',
         ]);
         abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
     }
