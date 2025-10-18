@@ -29,15 +29,15 @@ $snapToken = computed(function () {
         return '';
     }
 
-    // ownership check
-    if (!$transaction || $transaction->user_id !== Auth::user()->id) {
-        Log::warning('Unauthorized access to payment page', [
-            'transaction_id' => $transaction->id ?? 'null',
-            'user_id' => Auth::user()->id,
-            'transaction_user_id' => $transaction->user_id ?? 'null',
-        ]);
-        abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
-    }
+    // // ownership check
+    // if (!$transaction || $transaction->user_id !== Auth::user()->id) {
+    //     Log::warning('Unauthorized access to payment page', [
+    //         'transaction_id' => $transaction->id ?? 'null',
+    //         'user_id' => Auth::user()->id,
+    //         'transaction_user_id' => $transaction->user_id ?? 'null',
+    //     ]);
+    //     abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
+    // }
     // validate transaction data
     try {
         $checkIn = \Carbon\Carbon::parse($transaction->check_in);
