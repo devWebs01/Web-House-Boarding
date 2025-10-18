@@ -66,7 +66,7 @@ $submitTransaction = function () {
         $user = Auth::user();
 
         $code = 'INV-' . now()->format('dmY-His') . '-' . strtoupper(Str::random(4));
-        $checkOut = Carbon::parse($this->check_in)->addMonths($this->duration);
+        $checkOut = Carbon::parse($this->check_in)->addMonths((int) $this->duration);
 
         $payload = [
             'user_id' => $user->id,
