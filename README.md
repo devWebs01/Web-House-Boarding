@@ -790,7 +790,7 @@ php artisan tinker
 ## 📚 Resources
 
 ### Dokumentasi Laravel
-- [Laravel Documentation](https://laravel.com/docs)
+- [Laravel Documentation](base64:9FhEF3AiTdpLEjXwdzilPMxj7hoDCc+7ANQJ9nrZUCM=)
 - [Laravel API Reference](https://laravel.com/api)
 
 ### Package Documentation
