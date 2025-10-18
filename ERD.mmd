@@ -1,0 +1,117 @@
+# Entity Relationship Diagram (ERD) - E-Kos System
+# Generated with Mermaid
+
+erDiagram
+    USER ||--o{ BOARDING_HOUSE : owns
+    USER ||--o{ TRANSACTION : makes
+    USER ||--|| IDENTITY : has
+    USER ||--o{ COMMENT : writes
+
+    BOARDING_HOUSE ||--o{ ROOM : contains
+    BOARDING_HOUSE ||--o{ FACILITY : provides
+    BOARDING_HOUSE ||--o{ REGULATION : has
+    BOARDING_HOUSE ||--o{ GALLERY : showcases
+    BOARDING_HOUSE ||--o{ TRANSACTION : receives
+    BOARDING_HOUSE ||--o{ COMMENT : receives
+
+    ROOM ||--o{ TRANSACTION : booked_in
+
+    USER } {
+        int id PK "Primary Key"
+        string name "Nama lengkap pengguna"
+        string email "Email unik pengguna"
+        string password "Password terenkripsi"
+        string role "Role: guest, owner, admin"
+        timestamp email_verified_at "Waktu verifikasi email"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    BOARDING_HOUSE } {
+        int id PK "Primary Key"
+        string name "Nama rumah kost"
+        text address "Alamat lengkap"
+        string location_map "Link/map lokasi"
+        int owner_id FK "ID pemilik kost"
+        string thumbnail "Foto thumbnail kost"
+        string category "Kategori: putra, putri, campur"
+        string verification_status "Status verifikasi admin"
+        int minimum_rental_period "Minimal periode sewa (bulan)"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    ROOM } {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string room_number "Nomor kamar"
+        decimal price "Harga sewa per bulan"
+        decimal size "Ukuran kamar (m²)"
+        string status "Status: available, booked, maintenance"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    TRANSACTION } {
+        int id PK "Primary Key"
+        int user_id FK "ID penyewa"
+        int boarding_house_id FK "ID rumah kost"
+        int room_id FK "ID kamar yang dipesan"
+        string code "Kode unik transaksi"
+        date check_in "Tanggal masuk kost"
+        date check_out "Tanggal keluar kost"
+        decimal total "Total pembayaran"
+        string status "Status: pending, confirmed, paid, cancelled"
+        string snapToken "Token pembayaran Midtrans"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    FACILITY } {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string name "Nama fasilitas"
+        string icon "Icon fasilitas"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    REGULATION } {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string title "Judul peraturan"
+        text description "Deskripsi peraturan"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    GALLERY } {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        string image_path "Path file gambar"
+        string caption "Keterangan gambar"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    COMMENT } {
+        int id PK "Primary Key"
+        int boarding_house_id FK "ID rumah kost"
+        int user_id FK "ID pengguna yang komentar"
+        text content "Isi komentar"
+        int rating "Rating (1-5)"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
+
+    IDENTITY } {
+        int id PK "Primary Key"
+        int user_id FK "ID pengguna"
+        string full_name "Nama lengkap"
+        string phone_number "Nomor telepon"
+        string whatsapp_number "Nomor WhatsApp"
+        text address "Alamat pengguna"
+        string profile_picture "Foto profil"
+        timestamp created_at "Tanggal dibuat"
+        timestamp updated_at "Tanggal diupdate"
+    }
