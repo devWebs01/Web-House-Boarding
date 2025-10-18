@@ -37,6 +37,7 @@ mount(function () {
     //     abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
     // }
 
+    
     $this->isAuthorized = true;
 });
 
