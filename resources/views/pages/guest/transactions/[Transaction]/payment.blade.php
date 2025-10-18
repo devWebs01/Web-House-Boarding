@@ -30,10 +30,10 @@ $snapToken = computed(function () {
     }
 
     // ownership check
-    if (!$transaction || $transaction->user_id !== auth()->id()) {
+    if (!$transaction || $transaction->user_id !== Auth::user()->id) {
         Log::warning('Unauthorized access to payment page', [
             'transaction_id' => $transaction->id ?? 'null',
-            'user_id' => auth()->id(),
+            'user_id' => Auth::user()->id,
             'transaction_user_id' => $transaction->user_id ?? 'null',
         ]);
         abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
