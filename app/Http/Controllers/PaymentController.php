@@ -54,7 +54,7 @@ class PaymentController extends Controller
             // Build complete params array for Midtrans
             $params = array_merge($transactionDetails, [
                 'customer_details' => $customerDetails,
-                'item_details' => $itemDetails
+                'item_details' => $itemDetails,
             ]);
 
             $response = $this->midtransService->createTransaction($params);
@@ -79,7 +79,7 @@ class PaymentController extends Controller
             Log::error('Invalid signature for callback', [
                 'expected' => $signature,
                 'received' => $notification['signature_key'] ?? 'null',
-                'order_id' => $notification['order_id'] ?? 'null'
+                'order_id' => $notification['order_id'] ?? 'null',
             ]);
 
             return response()->json(['status' => 'error', 'message' => 'Invalid signature'], 403);
