@@ -28,14 +28,14 @@ mount(function () {
     }
 
     // Ownership check - pindah ke mount agar cek sebelum render
-    if ($this->transaction->user_id !== auth()->id()) {
-        Log::warning('Unauthorized access to payment page', [
-            'transaction_id' => $this->transaction->id,
-            'user_id' => auth()->id(),
-            'transaction_user_id' => $this->transaction->user_id,
-        ]);
-        abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
-    }
+    // if ($this->transaction->user_id !== auth()->id()) {
+    //     Log::warning('Unauthorized access to payment page', [
+    //         'transaction_id' => $this->transaction->id,
+    //         'user_id' => auth()->id(),
+    //         'transaction_user_id' => $this->transaction->user_id,
+    //     ]);
+    //     abort(403, 'Anda tidak berhak mengakses halaman pembayaran ini.');
+    // }
 
     $this->isAuthorized = true;
 });
